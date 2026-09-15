@@ -1,3 +1,6 @@
+import json
+import urllib.request
+
 import duckdb
 import pandas as pd
 import plotly.express as px
@@ -43,6 +46,38 @@ MESES_ES = {
 }
 
 NAME_NORMALIZER = {
+    "AGUASCALIENTES": "Aguascalientes",
+    "BAJA CALIFORNIA": "Baja California",
+    "BAJA CALIFORNIA SUR": "Baja California Sur",
+    "CAMPECHE": "Campeche",
+    "CHIAPAS": "Chiapas",
+    "CHIHUAHUA": "Chihuahua",
+    "CIUDAD DE MEXICO": "Ciudad de México",
+    "COAHUILA": "Coahuila",
+    "COLIMA": "Colima",
+    "DURANGO": "Durango",
+    "ESTADO DE MEXICO": "México",
+    "GUANAJUATO": "Guanajuato",
+    "GUERRERO": "Guerrero",
+    "HIDALGO": "Hidalgo",
+    "JALISCO": "Jalisco",
+    "MICHOACAN": "Michoacán",
+    "MORELOS": "Morelos",
+    "NAYARIT": "Nayarit",
+    "NUEVO LEON": "Nuevo León",
+    "OAXACA": "Oaxaca",
+    "PUEBLA": "Puebla",
+    "QUERETARO": "Querétaro",
+    "QUINTANA ROO": "Quintana Roo",
+    "SAN LUIS POTOSI": "San Luis Potosí",
+    "SINALOA": "Sinaloa",
+    "SONORA": "Sonora",
+    "TABASCO": "Tabasco",
+    "TAMAULIPAS": "Tamaulipas",
+    "TLAXCALA": "Tlaxcala",
+    "VERACRUZ": "Veracruz",
+    "YUCATAN": "Yucatán",
+    "ZACATECAS": "Zacatecas",
     "Coahuila de Zaragoza": "Coahuila",
     "Michoacán de Ocampo": "Michoacán",
     "Veracruz de Ignacio de la Llave": "Veracruz",
@@ -266,6 +301,16 @@ def get_bounds():
     ).fetchdf().iloc[:, 0].tolist()
     return pd.Timestamp(fecha_min).date(), pd.Timestamp(fecha_max).date(), bancos, estados
 
+@st.cache_data(show_spinner=False, ttl=86400)
+def get_geojson_estados():
+    url = "https://raw.githubusercontent.com/angelnmara/geojson/master/mexicoHigh.json"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            return json.loads(response.read().decode())
+    except Exception:
+        return None
+
 def build_where(fecha_ini, fecha_fin, bancos_sel: list, estados_sel: list):
     clausulas = ['"Fecha Registro" BETWEEN ? AND ?']
     params = [fecha_ini, fecha_fin]
@@ -347,7 +392,6 @@ def query_programas_distribucion(fecha_ini, fecha_fin, bancos_sel: tuple, estado
         GROUP BY 1
         HAVING SUM("Monto Garantizado") > 0
         ORDER BY monto DESC
-        LIMIT 10
     """
     return con.execute(sql, params).fetchdf()
 
@@ -489,6 +533,9 @@ def apply_preset():
     elif preset == "Histórico":
         st.session_state["filtro_rango_fechas"] = (fecha_min, fecha_max)
 
+def marcar_rango_personalizado():
+    st.session_state["preset_selector"] = None
+
 def reset_all_filters():
     st.session_state["filtro_rango_fechas"] = (fecha_min, fecha_max)
     st.session_state["filtro_bancos"] = []
@@ -504,22 +551,23 @@ st.markdown(
 with st.container(border=True):
     fc1, fc2, fc3, fc4, fc5 = st.columns([1.0, 1.3, 1.2, 1.2, 0.4])
     with fc1:
-        st.markdown("**Atajos de Periodo**")
-        st.selectbox(
-            "Atajos de Periodo",
+        st.markdown("**Atajos de periodo**")
+        st.segmented_control(
+            "Atajos de periodo",
             options=["Histórico", "YTD", "Últimos 6M", "Último Año"],
             key="preset_selector",
             label_visibility="collapsed",
-            on_change=apply_preset
+            on_change=apply_preset,
         )
     with fc2:
-        st.markdown("**Periodo (Fecha)**")
+        st.markdown("**Periodo (fecha)**")
         rango_fechas = st.date_input(
             "Periodo",
             min_value=fecha_min,
             max_value=fecha_max,
             key="filtro_rango_fechas",
             label_visibility="collapsed",
+            on_change=marcar_rango_personalizado,
         )
     with fc3:
         st.markdown("**Banco de 2° piso**")
@@ -545,13 +593,17 @@ with st.container(border=True):
 
 if isinstance(rango_fechas, (tuple, list)) and len(rango_fechas) == 2:
     fecha_ini, fecha_fin = rango_fechas
-elif isinstance(rango_fechas, (tuple, list)) and len(rango_fechas) == 1:
-    fecha_ini, fecha_fin = rango_fechas[0], fecha_max
+    st.session_state["_ultimo_rango_valido"] = (fecha_ini, fecha_fin)
 else:
-    fecha_ini, fecha_fin = fecha_min, fecha_max
+    # Selección en curso (solo se ha elegido la fecha inicial): se conserva
+    # el último rango completo en vez de recalcular con un fin supuesto.
+    fecha_ini, fecha_fin = st.session_state.get("_ultimo_rango_valido", (fecha_min, fecha_max))
+    st.info("Selecciona la fecha final para actualizar el periodo.", icon=":material/event:")
 
 filtros_bancos = tuple(bancos_sel)
 filtros_estados = tuple(estados_sel)
+
+st.caption(f"Mostrando datos del **{fecha_ini:%d/%m/%Y}** al **{fecha_fin:%d/%m/%Y}**.")
 
 kpis = query_kpis(fecha_ini, fecha_fin, filtros_bancos, filtros_estados)
 
@@ -632,36 +684,80 @@ with st.container(border=True):
         st.plotly_chart(fig_evol, use_container_width=True, config={"displayModeBar": False})
 
 with st.container(border=True):
-    st.markdown('<p class="chart-title">Distribución del portafolio por programa (Top 10)</p>', unsafe_allow_html=True)
-    df_prog = query_programas_distribucion(fecha_ini, fecha_fin, filtros_bancos, filtros_estados)
-    if df_prog.empty:
-        st.info("No hay datos para los filtros seleccionados.")
-    else:
-        df_prog = df_prog.sort_values("monto", ascending=True)
-        top_prog = df_prog.iloc[-1]
-        part_prog = (top_prog["monto"] / df_prog["monto"].sum()) * 100
-        st.markdown(
-            f'<p class="chart-insight"><b>{top_prog["programa"]}</b> lidera con <b>{fmt_mdp(top_prog["monto"])}</b> en monto garantizado ({part_prog:.1f}% del top 10 mostrado).</p>',
-            unsafe_allow_html=True,
-        )
-        fig_prog = px.bar(
-            df_prog,
-            x="monto",
-            y="programa",
-            orientation="h",
-            color="monto",
-            color_continuous_scale=[SLATE_200, PRIMARY],
-            text=df_prog["monto"].apply(fmt_mdp),
-        )
-        fig_prog.update_traces(
-            textposition="outside",
-            hovertemplate="%{y}<br>Monto Garantizado: $%{x:,.0f}<extra></extra>",
-        )
-        fig_prog.update_coloraxes(showscale=False)
-        aplicar_tema(fig_prog, altura=400)
-        fig_prog.update_xaxes(tickprefix="$", tickformat=".2s", title=None)
-        fig_prog.update_yaxes(title=None)
-        st.plotly_chart(fig_prog, use_container_width=True, config={"displayModeBar": False})
+        st.markdown('<p class="chart-title">Distribución del portafolio por programa</p>', unsafe_allow_html=True)
+        df_prog = query_programas_distribucion(fecha_ini, fecha_fin, filtros_bancos, filtros_estados)
+        if df_prog.empty:
+            st.info("No hay datos para los filtros seleccionados.")
+        else:
+            df_prog = df_prog.sort_values("monto", ascending=False)
+            
+            is_only_bancomext = len(filtros_bancos) == 1 and filtros_bancos[0] == "BANCOMEXT"
+            
+            if is_only_bancomext:
+                top_prog = df_prog.iloc[0]
+                part_prog = (top_prog["monto"] / df_prog["monto"].sum()) * 100
+                st.markdown(
+                    f'<p class="chart-insight"><b>{top_prog["programa"]}</b> lidera con <b>{fmt_mdp(top_prog["monto"])}</b> en monto garantizado ({part_prog:.1f}% del total).</p>',
+                    unsafe_allow_html=True,
+                )
+                fig_prog = px.bar(
+                    df_prog,
+                    x="programa",
+                    y="monto",
+                    color="monto",
+                    color_continuous_scale=[SLATE_200, PRIMARY],
+                    text=df_prog["monto"].apply(fmt_mdp),
+                )
+                fig_prog.update_traces(
+                    textposition="outside",
+                    hovertemplate="%{x}<br>Monto Garantizado: $%{y:,.0f}<extra></extra>",
+                )
+                fig_prog.update_coloraxes(showscale=False)
+                aplicar_tema(fig_prog, altura=440)
+                fig_prog.update_xaxes(title=None, tickangle=-35, tickfont=dict(size=10))
+                fig_prog.update_yaxes(tickprefix="$", tickformat=".2s", title=None)
+                st.plotly_chart(fig_prog, use_container_width=True, config={"displayModeBar": False})
+            else:
+                top_prog = df_prog.iloc[0]
+                part_prog = (top_prog["monto"] / df_prog["monto"].sum()) * 100
+                st.markdown(
+                    f'<p class="chart-insight"><b>{top_prog["programa"]}</b> lidera con <b>{fmt_mdp(top_prog["monto"])}</b> en monto garantizado ({part_prog:.1f}% del total).</p>',
+                    unsafe_allow_html=True,
+                )
+                
+                df_g1 = df_prog[df_prog['monto'] >= 1000000000]
+                df_g2 = df_prog[(df_prog['monto'] >= 100000000) & (df_prog['monto'] < 1000000000)]
+                df_g3 = df_prog[(df_prog['monto'] >= 10000000) & (df_prog['monto'] < 100000000)]
+                df_g4 = df_prog[df_prog['monto'] < 10000000]
+                
+                c1, c2 = st.columns(2)
+                c3, c4 = st.columns(2)
+                
+                def plot_grid_chart(df_sub, col_st, title_sub):
+                    with col_st:
+                        if df_sub.empty:
+                            st.markdown(f'<p class="chart-insight" style="margin-top: 15px;"><b>{title_sub}</b><br>Sin programas en esta escala.</p>', unsafe_allow_html=True)
+                        else:
+                            st.markdown(f'<p class="chart-insight" style="margin-top: 15px;"><b>{title_sub}</b></p>', unsafe_allow_html=True)
+                            fig_sub = px.bar(
+                                df_sub, x="programa", y="monto", color="monto",
+                                color_continuous_scale=[SLATE_200, PRIMARY],
+                                text=df_sub["monto"].apply(fmt_mdp)
+                            )
+                            fig_sub.update_traces(
+                                textposition="outside",
+                                hovertemplate="%{x}<br>Monto Garantizado: $%{y:,.0f}<extra></extra>",
+                            )
+                            fig_sub.update_coloraxes(showscale=False)
+                            aplicar_tema(fig_sub, altura=350)
+                            fig_sub.update_xaxes(title=None, tickangle=-35, tickfont=dict(size=9))
+                            fig_sub.update_yaxes(tickprefix="$", tickformat=".2s", title=None)
+                            st.plotly_chart(fig_sub, use_container_width=True, config={"displayModeBar": False})
+                
+                plot_grid_chart(df_g1, c1, "Escala: Mayor a 1,000 MDP (MMDP)")
+                plot_grid_chart(df_g2, c2, "Escala: 100 MDP a 1,000 MDP")
+                plot_grid_chart(df_g3, c3, "Escala: 10 MDP a 100 MDP")
+                plot_grid_chart(df_g4, c4, "Escala: Menor a 10 MDP")
 
 col_bank1, col_bank2 = st.columns(2)
 
@@ -735,109 +831,88 @@ else:
 
 df_mapa = query_mapa(fecha_ini, fecha_fin, filtros_bancos, filtros_estados)
 
-with st.container(border=True):
-    st.markdown('<p class="chart-title">Distribución territorial de saldo vivo por estado</p>', unsafe_allow_html=True)
-    if df_mapa.empty:
-        st.info("No hay datos para los filtros seleccionados.")
+if df_mapa.empty:
+    with st.container(border=True):
+        st.info("No hay datos territoriales para los filtros seleccionados.")
+else:
+    geojson_data = get_geojson_estados()
+    if geojson_data is None:
+        st.warning("No fue posible cargar la geometría de los estados en este momento. Intenta de nuevo más tarde.")
     else:
         df_mapa_plot = df_mapa.copy()
+        df_mapa_plot["estado_geo"] = df_mapa_plot["estado"].replace(NAME_NORMALIZER)
         
-        # Mapeo específico para coincidir con las llaves del GeoJSON
-        GEOJSON_MAPPER = {
-            "Coahuila": "Coahuila de Zaragoza",
-            "Michoacán": "Michoacán de Ocampo",
-            "Veracruz": "Veracruz de Ignacio de la Llave",
-            "Ciudad de México": "Distrito Federal",
-            "CDMX": "Distrito Federal"
-        }
-        df_mapa_plot["estado_geo"] = df_mapa_plot["estado"].replace(GEOJSON_MAPPER)
-        
-        url_geojson = "https://raw.githubusercontent.com/angelnmara/geojson/master/mexicoHigh.json"
-        
-        # Descarga segura del GeoJSON a memoria para evitar bloqueos
-        import urllib.request
-        import json
-        try:
-            req = urllib.request.Request(url_geojson, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req) as response:
-                geojson_data = json.loads(response.read().decode())
-        except Exception:
-            geojson_data = url_geojson
+        def create_map(color_col, z_format):
+            fig = px.choropleth(
+                df_mapa_plot,
+                geojson=geojson_data,
+                locations="estado_geo",
+                featureidkey="properties.name",
+                color=color_col,
+                color_continuous_scale="Teal",
+                hover_name="estado",
+            )
+            if color_col == "saldo":
+                custom_data = df_mapa_plot[["monto_garantizado", "acreditados"]]
+                ht = "<b>%{hovertext}</b><br><span style='color:#7dd3c8; font-weight:700;'>Saldo Vivo:</span> $%{z:,.0f}<br><span style='color:#7dd3c8; font-weight:700;'>Monto Garantizado:</span> $%{customdata[0]:,.0f}<br><span style='color:#7dd3c8; font-weight:700;'>Acreditados:</span> %{customdata[1]:,}<extra></extra>"
+            else:
+                custom_data = df_mapa_plot[["saldo", "acreditados"]]
+                ht = "<b>%{hovertext}</b><br><span style='color:#7dd3c8; font-weight:700;'>Monto Garantizado:</span> $%{z:,.0f}<br><span style='color:#7dd3c8; font-weight:700;'>Saldo Vivo:</span> $%{customdata[0]:,.0f}<br><span style='color:#7dd3c8; font-weight:700;'>Acreditados:</span> %{customdata[1]:,}<extra></extra>"
+            
+            fig.update_traces(
+                customdata=custom_data,
+                hovertemplate=ht,
+                marker_line_color="white",
+                marker_line_width=1.5,
+                hoverlabel=dict(
+                    bgcolor="#0F172A",
+                    font_size=13,
+                    font_family="Inter, sans-serif",
+                    font_color="#F8FAFC",
+                    bordercolor="#0F172A",
+                    align="left",
+                ),
+            )
+            fig.update_geos(fitbounds="locations", visible=False, bgcolor="#F8FAFC")
+            fig.update_layout(
+                margin={"r": 0, "t": 0, "l": 0, "b": 0, "pad": 0},
+                height=410,
+                autosize=True,
+                dragmode=False,
+                plot_bgcolor="#F8FAFC",
+                paper_bgcolor="#F8FAFC",
+                coloraxis_colorbar=dict(
+                    title="",
+                    thickness=10,
+                    len=0.88,
+                    y=0.5,
+                    yanchor="middle",
+                    outlinewidth=0,
+                    tickfont=dict(color="#64748B"),
+                    tickprefix="$",
+                    tickformat=".2s",
+                ),
+            )
+            return fig
 
-        fig_mapa = px.choropleth(
-            df_mapa_plot,
-            geojson=geojson_data,
-            locations="estado_geo",
-            featureidkey="properties.name",
-            color="saldo",
-            color_continuous_scale="Teal",
-            hover_name="estado",
-        )
-        fig_mapa.update_traces(
-            customdata=df_mapa_plot[["monto_garantizado", "acreditados"]],
-            hovertemplate="<b>%{hovertext}</b><br><span style='color:#7dd3c8; font-weight:700;'>Saldo Vivo:</span> $%{z:,.0f}<br><span style='color:#7dd3c8; font-weight:700;'>Monto Garantizado:</span> $%{customdata[0]:,.0f}<br><span style='color:#7dd3c8; font-weight:700;'>Acreditados:</span> %{customdata:,}<extra></extra>",
-            marker_line_color="white",
-            marker_line_width=1.5,
-            hoverlabel=dict(
-                bgcolor="#0F172A",
-                font_size=13,
-                font_family="Inter, sans-serif",
-                font_color="#F8FAFC",
-                bordercolor="#0F172A",
-                align="left",
-            ),
-        )
-        fig_mapa.update_geos(fitbounds="locations", visible=False, bgcolor="#F8FAFC")
-        fig_mapa.update_layout(
-            margin={"r": 0, "t": 0, "l": 0, "b": 0, "pad": 0},
-            height=430,
-            autosize=True,
-            dragmode=False,
-            plot_bgcolor="#F8FAFC",
-            paper_bgcolor="#F8FAFC",
-            coloraxis_colorbar=dict(
-                title="",
-                thickness=10,
-                len=0.88,
-                y=0.5,
-                yanchor="middle",
-                outlinewidth=0,
-                tickfont=dict(color="#64748B"),
-                tickprefix="$",
-                tickformat=".2s",
-            ),
-        )
-        st.plotly_chart(fig_mapa, use_container_width=True, config={"displayModeBar": False})
+        fig_saldo = create_map("saldo", "$%{z:,.0f}")
+        fig_monto = create_map("monto_garantizado", "$%{z:,.0f}")
 
-with st.container(border=True):
-    st.markdown('<p class="chart-title">Top 10 estados por saldo vivo</p>', unsafe_allow_html=True)
-    if df_mapa.empty:
-        st.info("No hay datos para los filtros seleccionados.")
-    else:
-        df_geo = df_mapa.head(10).sort_values("saldo", ascending=True)
-        lider_estado = df_geo.iloc[-1]
-        st.markdown(
-            f'<p class="chart-insight"><b>{lider_estado["estado"]}</b> encabeza el portafolio con <b>{fmt_mdp(lider_estado["saldo"])}</b> en saldo vivo.</p>',
-            unsafe_allow_html=True,
-        )
-        fig_geo = px.bar(
-            df_geo,
-            x="saldo",
-            y="estado",
-            orientation="h",
-            color="saldo",
-            color_continuous_scale=[SLATE_200, PRIMARY],
-            text=df_geo["saldo"].apply(fmt_mdp),
-        )
-        fig_geo.update_traces(
-            textposition="outside",
-            hovertemplate="%{y}<br>Saldo: $%{x:,.0f}<extra></extra>",
-        )
-        fig_geo.update_coloraxes(showscale=False)
-        aplicar_tema(fig_geo, altura=400)
-        fig_geo.update_xaxes(tickprefix="$", tickformat=".2s", title=None)
-        fig_geo.update_yaxes(title=None)
-        st.plotly_chart(fig_geo, use_container_width=True, config={"displayModeBar": False})
+        col_m1, col_m2 = st.columns(2)
+        
+        with col_m1:
+            with st.container(border=True):
+                st.markdown('<p class="chart-title">Distribución territorial: Saldo Vivo</p>', unsafe_allow_html=True)
+                lider = df_mapa.sort_values("saldo", ascending=False).iloc[0]
+                st.markdown(f'<p class="chart-insight"><b>{lider["estado"]}</b> encabeza con <b>{fmt_mdp(lider["saldo"])}</b>.</p>', unsafe_allow_html=True)
+                st.plotly_chart(fig_saldo, use_container_width=True, config={"displayModeBar": False})
+                
+        with col_m2:
+            with st.container(border=True):
+                st.markdown('<p class="chart-title">Distribución territorial: Monto Garantizado</p>', unsafe_allow_html=True)
+                lider2 = df_mapa.sort_values("monto_garantizado", ascending=False).iloc[0]
+                st.markdown(f'<p class="chart-insight"><b>{lider2["estado"]}</b> encabeza con <b>{fmt_mdp(lider2["monto_garantizado"])}</b>.</p>', unsafe_allow_html=True)
+                st.plotly_chart(fig_monto, use_container_width=True, config={"displayModeBar": False})
 
 st.caption(
     f"Datos filtrados del {fecha_ini:%d/%m/%Y} al {fecha_fin:%d/%m/%Y} · "
