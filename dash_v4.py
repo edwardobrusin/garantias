@@ -126,6 +126,39 @@ def fmt_periodo(fecha, gran: str) -> str:
         return f"{ts.year}"
     return str(fecha)
 
+def get_custom_ticks(max_value, n_ticks=5):
+    import math
+    if pd.isna(max_value) or max_value <= 0:
+        return [0], ["$0"]
+    raw_step = max_value / n_ticks
+    mag = math.floor(math.log10(raw_step)) if raw_step > 0 else 1
+    mag_pow = 10 ** mag
+    mag_m = raw_step / mag_pow
+    if mag_m > 5: step = 10 * mag_pow
+    elif mag_m > 2: step = 5 * mag_pow
+    elif mag_m > 1: step = 2 * mag_pow
+    else: step = 1 * mag_pow
+    
+    tickvals = []
+    cur = 0
+    while cur <= max_value * 1.05:
+        tickvals.append(cur)
+        cur += step
+        
+    ticktext = []
+    for v in tickvals:
+        if v == 0:
+            ticktext.append("$0")
+        elif v >= 1_000_000_000:
+            ticktext.append(f"${v/1_000_000_000:,.1f} MM".replace(".0 MM", " MM"))
+        elif v >= 1_000_000:
+            ticktext.append(f"${v/1_000_000:,.1f} M".replace(".0 M", " M"))
+        elif v >= 1_000:
+            ticktext.append(f"${v/1_000:,.1f} K".replace(".0 K", " K"))
+        else:
+            ticktext.append(f"${v:,.0f}")
+    return tickvals, ticktext
+
 def aplicar_tema(fig: go.Figure, altura: int = 380) -> go.Figure:
     fig.update_layout(
         paper_bgcolor=BG,
@@ -371,7 +404,8 @@ def query_evolucion(fecha_ini, fecha_fin, bancos_sel: tuple, estados_sel: tuple,
     sql = f"""
         SELECT
             {sql_date} AS periodo,
-            SUM("Monto Inicial") AS colocacion
+            SUM("Monto Inicial") AS colocacion,
+            SUM("Ultimo Saldo") AS saldo
         FROM garantias
         WHERE {where_sql}
         GROUP BY 1
@@ -454,8 +488,9 @@ def render_donut_chart(df_data: pd.DataFrame, banco_nombre: str, palette: list):
     df_sorted = df_data.sort_values("saldo", ascending=False).reset_index(drop=True)
     if len(df_sorted) > TOP_N:
         df_plot = df_sorted.iloc[:TOP_N].copy()
+        otros_count = len(df_sorted) - TOP_N
         otros_val = df_sorted.iloc[TOP_N:]["saldo"].sum()
-        df_plot.loc[len(df_plot)] = ["Otros intermediarios", otros_val]
+        df_plot.loc[len(df_plot)] = [f"Otros intermediarios ({otros_count})", otros_val]
     else:
         df_plot = df_sorted
     fig = px.pie(
@@ -469,6 +504,7 @@ def render_donut_chart(df_data: pd.DataFrame, banco_nombre: str, palette: list):
         textposition="outside",
         textinfo="percent",
         hovertemplate="%{label}<br>Saldo: $%{value:,.0f} (%{percent})<extra></extra>",
+        sort=False,
     )
     aplicar_tema(fig, altura=380)
     fig.update_layout(
@@ -504,8 +540,9 @@ def render_column_chart(df_data: pd.DataFrame, banco_nombre: str):
     )
     fig.update_coloraxes(showscale=False)
     aplicar_tema(fig, altura=380)
+    t_vals, t_texts = get_custom_ticks(df_plot["saldo"].max())
     fig.update_xaxes(title=None, tickangle=-20, tickfont=dict(size=10))
-    fig.update_yaxes(tickprefix="$", tickformat=".2s", title=None)
+    fig.update_yaxes(title=None, tickmode="array", tickvals=t_vals, ticktext=t_texts)
     fig.update_layout(margin=dict(l=8, r=8, t=15, b=30))
     return fig
 
@@ -552,7 +589,7 @@ with st.container(border=True):
     fc1, fc2, fc3, fc4, fc5 = st.columns([1.0, 1.3, 1.2, 1.2, 0.4])
     with fc1:
         st.markdown("**Atajos de periodo**")
-        st.segmented_control(
+        st.selectbox(
             "Atajos de periodo",
             options=["Histórico", "YTD", "Últimos 6M", "Último Año"],
             key="preset_selector",
@@ -660,7 +697,7 @@ st.markdown("<div style='margin-top: 16px;'></div>", unsafe_allow_html=True)
 with st.container(border=True):
     col_hdr1, col_hdr2 = st.columns([3.5, 1.2])
     with col_hdr1:
-        st.markdown('<p class="chart-title">Evolución temporal de la colocación</p>', unsafe_allow_html=True)
+        st.markdown('<p class="chart-title">Evolución temporal de la colocación y saldo</p>', unsafe_allow_html=True)
     with col_hdr2:
         gran_sel = st.selectbox(
             "Agrupación",
@@ -673,19 +710,69 @@ with st.container(border=True):
     if df_evol.empty:
         st.info("No hay datos para los filtros seleccionados.")
     else:
+        df_evol["periodo_dt"] = pd.to_datetime(df_evol["periodo"])
+        df_evol = df_evol.sort_values("periodo_dt").reset_index(drop=True)
+        
+        df_evol["var_periodo_col"] = df_evol["colocacion"].pct_change()
+        df_evol["var_periodo_sal"] = df_evol["saldo"].pct_change()
+        
+        offsets = {"Día": 365, "Semana": 52, "Quincena": 24, "Mes": 12, "Trimestre": 4, "Semestre": 2, "Año": 1}
+        offset = offsets.get(gran_sel, 12)
+        
+        df_evol["var_anual_col"] = df_evol["colocacion"].pct_change(periods=offset)
+        df_evol["var_anual_sal"] = df_evol["saldo"].pct_change(periods=offset)
+        
+        def fmt_pct(val):
+            if pd.isna(val) or val == float('inf') or val == float('-inf'): return "N/D"
+            return f"{val:+.1%}"
+            
+        df_evol["hover_label"] = df_evol["periodo"].apply(lambda x: fmt_periodo(x, gran_sel))
+        df_evol["var_periodo_col_str"] = df_evol["var_periodo_col"].apply(fmt_pct)
+        df_evol["var_anual_col_str"] = df_evol["var_anual_col"].apply(fmt_pct)
+        df_evol["var_periodo_sal_str"] = df_evol["var_periodo_sal"].apply(fmt_pct)
+        df_evol["var_anual_sal_str"] = df_evol["var_anual_sal"].apply(fmt_pct)
+        
+        if gran_sel == "Año":
+            ht_col = "<b>%{customdata[0]}</b><br>Colocación: $%{y:,.0f}<br>Variación anual: %{customdata[1]}<extra></extra>"
+            ht_sal = "<b>%{customdata[0]}</b><br>Saldo: $%{y:,.0f}<br>Variación anual: %{customdata[2]}<extra></extra>"
+            custom_data = df_evol[["hover_label", "var_periodo_col_str", "var_periodo_sal_str"]].values
+        else:
+            ht_col = "<b>%{customdata[0]}</b><br>Colocación: $%{y:,.0f}<br>Var. periodo: %{customdata[1]}<br>Var. anual: %{customdata[2]}<extra></extra>"
+            ht_sal = "<b>%{customdata[0]}</b><br>Saldo: $%{y:,.0f}<br>Var. periodo: %{customdata[3]}<br>Var. anual: %{customdata[4]}<extra></extra>"
+            custom_data = df_evol[["hover_label", "var_periodo_col_str", "var_anual_col_str", "var_periodo_sal_str", "var_anual_sal_str"]].values
+
         pico = df_evol.loc[df_evol["colocacion"].idxmax()]
         pico_str = fmt_periodo(pico["periodo"], gran_sel)
-        df_evol["hover_label"] = df_evol["periodo"].apply(lambda x: fmt_periodo(x, gran_sel))
-        fig_evol = go.Figure(go.Bar(
-            x=df_evol["periodo"],
-            y=df_evol["colocacion"],
-            customdata=df_evol["hover_label"],
-            marker=dict(color=PRIMARY),
-            hovertemplate="<b>%{customdata}</b><br>Colocación: $%{y:,.0f}<extra></extra>",
-        ))
-        aplicar_tema(fig_evol, altura=330)
-        fig_evol.update_yaxes(tickprefix="$", tickformat=".2s")
-        st.plotly_chart(fig_evol, use_container_width=True, config={"displayModeBar": False})
+        
+        col_chart1, col_chart2 = st.columns(2)
+        
+        with col_chart1:
+            fig_evol_col = go.Figure(go.Bar(
+                x=df_evol["periodo"],
+                y=df_evol["colocacion"],
+                customdata=custom_data,
+                marker=dict(color=PRIMARY),
+                hovertemplate=ht_col,
+            ))
+            aplicar_tema(fig_evol_col, altura=330)
+            t_vals_col, t_texts_col = get_custom_ticks(df_evol["colocacion"].max())
+            fig_evol_col.update_yaxes(tickmode="array", tickvals=t_vals_col, ticktext=t_texts_col)
+            fig_evol_col.update_layout(title="Colocación", title_font=dict(size=14, color=SLATE_700), margin=dict(t=40))
+            st.plotly_chart(fig_evol_col, use_container_width=True, config={"displayModeBar": False})
+            
+        with col_chart2:
+            fig_evol_sal = go.Figure(go.Bar(
+                x=df_evol["periodo"],
+                y=df_evol["saldo"],
+                customdata=custom_data,
+                marker=dict(color=SLATE_700),
+                hovertemplate=ht_sal,
+            ))
+            aplicar_tema(fig_evol_sal, altura=330)
+            t_vals_sal, t_texts_sal = get_custom_ticks(df_evol["saldo"].max())
+            fig_evol_sal.update_yaxes(tickmode="array", tickvals=t_vals_sal, ticktext=t_texts_sal)
+            fig_evol_sal.update_layout(title="Saldo", title_font=dict(size=14, color=SLATE_700), margin=dict(t=40))
+            st.plotly_chart(fig_evol_sal, use_container_width=True, config={"displayModeBar": False})
 
 with st.container(border=True):
         st.markdown('<p class="chart-title">Distribución del portafolio por programa</p>', unsafe_allow_html=True)
@@ -700,10 +787,7 @@ with st.container(border=True):
             if is_only_bancomext:
                 top_prog = df_prog.iloc[0]
                 part_prog = (top_prog["monto"] / df_prog["monto"].sum()) * 100
-                st.markdown(
-                    f'<p class="chart-insight"><b>{top_prog["programa"]}</b> lidera con <b>{fmt_mdp(top_prog["monto"])}</b> en monto garantizado ({part_prog:.1f}% del total).</p>',
-                    unsafe_allow_html=True,
-                )
+
                 fig_prog = px.bar(
                     df_prog,
                     x="programa",
@@ -718,16 +802,13 @@ with st.container(border=True):
                 )
                 fig_prog.update_coloraxes(showscale=False)
                 aplicar_tema(fig_prog, altura=440)
+                t_vals_prog, t_texts_prog = get_custom_ticks(df_prog["monto"].max())
                 fig_prog.update_xaxes(title=None, tickangle=-35, tickfont=dict(size=10))
-                fig_prog.update_yaxes(tickprefix="$", tickformat=".2s", title=None)
+                fig_prog.update_yaxes(title=None, tickmode="array", tickvals=t_vals_prog, ticktext=t_texts_prog)
                 st.plotly_chart(fig_prog, use_container_width=True, config={"displayModeBar": False})
             else:
                 top_prog = df_prog.iloc[0]
                 part_prog = (top_prog["monto"] / df_prog["monto"].sum()) * 100
-                st.markdown(
-                    f'<p class="chart-insight"><b>{top_prog["programa"]}</b> lidera con <b>{fmt_mdp(top_prog["monto"])}</b> en monto garantizado ({part_prog:.1f}% del total).</p>',
-                    unsafe_allow_html=True,
-                )
                 
                 df_g1 = df_prog[df_prog['monto'] >= 1000000000]
                 df_g2 = df_prog[(df_prog['monto'] >= 100000000) & (df_prog['monto'] < 1000000000)]
@@ -754,8 +835,9 @@ with st.container(border=True):
                             )
                             fig_sub.update_coloraxes(showscale=False)
                             aplicar_tema(fig_sub, altura=350)
+                            t_vals_sub, t_texts_sub = get_custom_ticks(df_sub["monto"].max())
                             fig_sub.update_xaxes(title=None, tickangle=-35, tickfont=dict(size=9))
-                            fig_sub.update_yaxes(tickprefix="$", tickformat=".2s", title=None)
+                            fig_sub.update_yaxes(title=None, tickmode="array", tickvals=t_vals_sub, ticktext=t_texts_sub)
                             st.plotly_chart(fig_sub, use_container_width=True, config={"displayModeBar": False})
                 
                 plot_grid_chart(df_g1, c1, "Escala: Mayor a 1,000 MDP (MMDP)")
@@ -777,10 +859,7 @@ if len(filtros_bancos) == 1:
             else:
                 top_int = df_inter_solo.iloc[0]
                 part_int = (top_int["saldo"] / df_inter_solo["saldo"].sum()) * 100
-                st.markdown(
-                    f'<p class="chart-insight"><b>{top_int["intermediario"]}</b> lidera con el <b>{part_int:.1f}%</b> del saldo vivo en {banco_solo}.</p>',
-                    unsafe_allow_html=True,
-                )
+
                 fig_donut_solo = render_donut_chart(df_inter_solo, banco_solo, paleta_activa)
                 if fig_donut_solo:
                     st.plotly_chart(fig_donut_solo, use_container_width=True, config={"displayModeBar": False})
@@ -809,10 +888,6 @@ else:
             else:
                 top_naf = df_inter_nafin.iloc[0]
                 part_naf = (top_naf["saldo"] / df_inter_nafin["saldo"].sum()) * 100
-                st.markdown(
-                    f'<p class="chart-insight"><b>{top_naf["intermediario"]}</b> lidera NAFIN con el <b>{part_naf:.1f}%</b> del saldo vivo.</p>',
-                    unsafe_allow_html=True,
-                )
                 fig_donut_naf = render_donut_chart(df_inter_nafin, "NAFIN", PALETTE_NAFIN)
                 if fig_donut_naf:
                     st.plotly_chart(fig_donut_naf, use_container_width=True, config={"displayModeBar": False})
@@ -825,10 +900,6 @@ else:
             else:
                 top_bc = df_inter_bcmxt.iloc[0]
                 part_bc = (top_bc["saldo"] / df_inter_bcmxt["saldo"].sum()) * 100
-                st.markdown(
-                    f'<p class="chart-insight"><b>{top_bc["intermediario"]}</b> lidera BANCOMEXT con el <b>{part_bc:.1f}%</b> del saldo vivo.</p>',
-                    unsafe_allow_html=True,
-                )
                 fig_donut_bc = render_donut_chart(df_inter_bcmxt, "BANCOMEXT", PALETTE_BCMXT)
                 if fig_donut_bc:
                     st.plotly_chart(fig_donut_bc, use_container_width=True, config={"displayModeBar": False})
@@ -858,10 +929,10 @@ else:
             )
             if color_col == "saldo":
                 custom_data = df_mapa_plot[["monto_garantizado", "acreditados"]]
-                ht = "<b>%{hovertext}</b><br><span style='color:#7dd3c8; font-weight:700;'>Saldo Vivo:</span> $%{z:,.0f}<br><span style='color:#7dd3c8; font-weight:700;'>Monto Garantizado:</span> $%{customdata[0]:,.0f}<br><span style='color:#7dd3c8; font-weight:700;'>Acreditados:</span> %{customdata[1]:,}<extra></extra>"
+                ht = "<b>%{hovertext}</b><br><span style='color:#7dd3c8; font-weight:700;'>Saldo:</span> $%{z:,.0f}<br><span style='color:#7dd3c8; font-weight:700;'>Monto Garantizado:</span> $%{customdata[0]:,.0f}<br><span style='color:#7dd3c8; font-weight:700;'>Acreditados:</span> %{customdata[1]:,}<extra></extra>"
             else:
                 custom_data = df_mapa_plot[["saldo", "acreditados"]]
-                ht = "<b>%{hovertext}</b><br><span style='color:#7dd3c8; font-weight:700;'>Monto Garantizado:</span> $%{z:,.0f}<br><span style='color:#7dd3c8; font-weight:700;'>Saldo Vivo:</span> $%{customdata[0]:,.0f}<br><span style='color:#7dd3c8; font-weight:700;'>Acreditados:</span> %{customdata[1]:,}<extra></extra>"
+                ht = "<b>%{hovertext}</b><br><span style='color:#7dd3c8; font-weight:700;'>Monto Garantizado:</span> $%{z:,.0f}<br><span style='color:#7dd3c8; font-weight:700;'>Saldo:</span> $%{customdata[0]:,.0f}<br><span style='color:#7dd3c8; font-weight:700;'>Acreditados:</span> %{customdata[1]:,}<extra></extra>"
             
             fig.update_traces(
                 customdata=custom_data,
@@ -878,9 +949,11 @@ else:
                 ),
             )
             fig.update_geos(fitbounds="locations", visible=False, bgcolor="#F8FAFC")
+            t_vals_map, t_texts_map = get_custom_ticks(df_mapa_plot[color_col].max())
+            
             fig.update_layout(
                 margin={"r": 0, "t": 0, "l": 0, "b": 0, "pad": 0},
-                height=410,
+                height=550,
                 autosize=True,
                 dragmode=False,
                 plot_bgcolor="#F8FAFC",
@@ -893,30 +966,45 @@ else:
                     yanchor="middle",
                     outlinewidth=0,
                     tickfont=dict(color="#64748B"),
-                    tickprefix="$",
-                    tickformat=".2s",
+                    tickmode="array",
+                    tickvals=t_vals_map,
+                    ticktext=t_texts_map,
                 ),
             )
             return fig
 
         fig_saldo = create_map("saldo", "$%{z:,.0f}")
-        fig_monto = create_map("monto_garantizado", "$%{z:,.0f}")
 
-        col_m1, col_m2 = st.columns(2)
-        
-        with col_m1:
-            with st.container(border=True):
-                st.markdown('<p class="chart-title">Distribución territorial: Saldo Vivo</p>', unsafe_allow_html=True)
-                lider = df_mapa.sort_values("saldo", ascending=False).iloc[0]
-                st.markdown(f'<p class="chart-insight"><b>{lider["estado"]}</b> encabeza con <b>{fmt_mdp(lider["saldo"])}</b>.</p>', unsafe_allow_html=True)
-                st.plotly_chart(fig_saldo, use_container_width=True, config={"displayModeBar": False})
-                
-        with col_m2:
-            with st.container(border=True):
-                st.markdown('<p class="chart-title">Distribución territorial: Monto Garantizado</p>', unsafe_allow_html=True)
-                lider2 = df_mapa.sort_values("monto_garantizado", ascending=False).iloc[0]
-                st.markdown(f'<p class="chart-insight"><b>{lider2["estado"]}</b> encabeza con <b>{fmt_mdp(lider2["monto_garantizado"])}</b>.</p>', unsafe_allow_html=True)
-                st.plotly_chart(fig_monto, use_container_width=True, config={"displayModeBar": False})
+        with st.container(border=True):
+            st.markdown('<p class="chart-title">Distribución territorial: Saldo</p>', unsafe_allow_html=True)
+            lider = df_mapa.sort_values("saldo", ascending=False).iloc[0]
+            st.plotly_chart(fig_saldo, use_container_width=True, config={"displayModeBar": False})
+            
+            st.markdown("<hr style='margin: 1.5rem 0;'>", unsafe_allow_html=True)
+            st.markdown('<p class="chart-title">Detalle por Entidad Federativa</p>', unsafe_allow_html=True)
+            
+            df_tabla = df_mapa.sort_values("saldo", ascending=False).reset_index(drop=True)
+            df_tabla["saldo"] = df_tabla["saldo"] / 1_000_000
+            df_tabla["monto_garantizado"] = df_tabla["monto_garantizado"] / 1_000_000
+
+            df_tabla = df_tabla.rename(columns={
+                "estado": "Estado",
+                "saldo": "Saldo (MDP)",
+                "monto_garantizado": "Monto Garantizado (MDP)",
+                "acreditados": "Acreditados"
+            })
+            
+            st.dataframe(
+                df_tabla,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Estado": st.column_config.TextColumn("Entidad Federativa"),
+                    "Saldo (MDP)": st.column_config.NumberColumn("Saldo (MDP)", format="$ %.1f"),
+                    "Monto Garantizado (MDP)": st.column_config.NumberColumn("Monto Garantizado (MDP)", format="$ %.1f"),
+                    "Acreditados": st.column_config.NumberColumn("Acreditados", format="%d"),
+                }
+            )
 
 st.caption(
     f"Datos filtrados del {fecha_ini:%d/%m/%Y} al {fecha_fin:%d/%m/%Y} · "
