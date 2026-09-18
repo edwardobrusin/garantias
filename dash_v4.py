@@ -512,12 +512,12 @@ def render_donut_chart(df_data: pd.DataFrame, banco_nombre: str, palette: list):
         legend=dict(
             orientation="h",
             yanchor="top",
-            y=-0.08,
+            y=-0.20,
             xanchor="center",
             x=0.5,
             font=dict(size=10),
         ),
-        margin=dict(l=8, r=8, t=8, b=30),
+        margin=dict(l=8, r=8, t=8, b=100),
     )
     return fig
 
