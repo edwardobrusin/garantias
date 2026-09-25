@@ -1,0 +1,11 @@
+# Ignorar archivos de datos crudos pesados
+data/raw/*.parquet
+data/raw/*.csv
+data/raw/*.xlsx
+
+# Ignorar archivos intermedios masivos (versiones anteriores)
+data/intermediate/garantias_0926.parquet
+data/intermediate/garantias_v5.parquet
+
+# (Opcional) Puedes elegir ignorar también la carpeta particionada si se genera en producción, 
+# pero dado que son archivos pequeños de ~1-5MB, puedes dejarlos subir a GitHub.
