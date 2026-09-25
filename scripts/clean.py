@@ -8,6 +8,7 @@ intermediario) para dejar un único parquet listo para el dashboard v5.
 """
 
 import re
+import shutil
 from pathlib import Path
 
 import pandas as pd
@@ -269,6 +270,10 @@ def main() -> None:
 
     # Creamos una columna de partición basada en año y mes
     df["anio_mes"] = df["periodo"].dt.strftime("%Y-%m")
+
+    # Limpiamos el directorio previo para evitar acumular parquets viejos o duplicar datos
+    if Path(DIR_SALIDA).exists():
+        shutil.rmtree(DIR_SALIDA)
 
     Path(DIR_SALIDA).mkdir(parents=True, exist_ok=True)
     df.to_parquet(
