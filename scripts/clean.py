@@ -82,45 +82,69 @@ def transformar_periodo(df: pd.DataFrame) -> pd.DataFrame:
 def limpiar_programa(texto) -> str:
     texto = str(texto).upper()
 
-    if re.search(r'IMPULSO NAFIN|IMPUSO NAFIN|IMPULSO MIPYMES', texto): return 'IMPULSO NAFIN'
-    if 'PRODUCTO NAFIN EMPRESARIAL' in texto: return 'PRODUCTO NAFIN EMPRESARIAL'
+    # 1. T-MEC (Debe ir antes que Comercio Exterior general para no solaparse)
+    if re.search(r'COMEX T-MEC|COMEX TMEC|COMERCIO EXTERIOR T-MEC|T-MEC PYME|TMEC|T-MEC', texto): return 'COMEX T-MEC'
+    
+    # 2. Comercio Exterior y Turismo
+    if re.search(r'COMEX|COMERCIO EXT|PYMEX|EXPORTADOR|COM EXT', texto): return 'COMERCIO EXTERIOR'
+    if re.search(r'TURISMO|HOTEL|EMPRESTUR', texto): return 'TURISMO'
 
-    if re.search(r'COMEX T-MEC|COMEX TMEC|COMERCIO EXTERIOR T-MEC|COMERCIO EXTERIOR EMPRESARIAL|PROGRAMA T-MEC|T-MEC PYME|TMEC|T-MEC', texto): return 'COMEX T-MEC'
-    if re.search(r'MUJERES|MUJER PYME', texto): return 'MUJERES EMPRESARIAS'
-    if 'AUTOMOTRIZ' in texto: return 'PROVEEDORES SECTOR AUTOMOTRIZ'
-    if 'ELECTRICO' in texto and 'ELECTRONICO' in texto: return 'PROVEEDORES SECTOR ELECTRICO-ELECTRONICO'
-    if 'TURISMO' in texto: return 'TURISMO'
-    if 'PLAN MEXICO' in texto: return 'PLAN MEXICO'
-    if 'MICRONEGOCIOS' in texto: return 'FINANCIAMIENTO A MICRONEGOCIOS'
-    if re.search(r'TU PRIMER CR[EÉ]DITO', texto): return 'TU PRIMER CREDITO'
-    if 'ECO CREDITO' in texto: return 'ECO CREDITO EMPRESARIAL'
-    if 'COBERTURAS DIFERENCIADAS' in texto: return 'COBERTURAS DIFERENCIADAS'
-    if 'CREDISUMINISTROS' in texto: return 'CREDISUMINISTROS'
+    # 3. Impulso Regional / Reactivación Económica (Programas Estatales)
+    if re.search(r'IMPULSO|IMPUSO NAFIN|IMP ECON|IMP ECO\s|IMP PARA EL DESARROLLO|FORT Y CONS MIPYMES|REACTIVACION ECONOMICA|REACT ECON|REAC ECON|PROM DES ECON', texto): return 'IMPULSO REGIONAL Y REACTIVACION'
+
+    # 4. Desastres Naturales y Emergentes
+    if re.search(r'DESASTRE|INUNDACION|HURACAN|EMERGENTE', texto): return 'APOYO DESASTRES NATURALES'
+
+    # 5. Sectores Industriales y Específicos
+    if re.search(r'AUTOMOTRIZ', texto): return 'PROVEEDORES SECTOR AUTOMOTRIZ'
+    if re.search(r'MOLDES.*TROQUELES', texto): return 'MOLDES Y TROQUELES'
+    if re.search(r'CUERO Y CALZADO', texto): return 'CUERO Y CALZADO'
+    if re.search(r'TEXTIL', texto): return 'TEXTIL, VESTIDO Y MODA'
+    if re.search(r'ELECTRICO.*ELECTRON|ELECTRONICO', texto): return 'PROVEEDORES SECTOR ELECTRICO-ELECTRONICO'
+    if re.search(r'GASOLINERA', texto): return 'GASOLINERAS'
+    if re.search(r'CONSTRUCCION', texto): return 'CONSTRUCCION'
+    if re.search(r'RADIODIFUSION', texto): return 'RADIODIFUSION'
+    if re.search(r'SECTOR MEDICO', texto): return 'SECTOR MEDICO'
+    if re.search(r'UNIV|ESTUDIOS SUP|CENTROS CULTURALES|ESCUELA|TECNOLOGICA', texto): return 'SECTOR EDUCATIVO'
+    if re.search(r'VEN A COMER|RESTAURANTES', texto): return 'SECTOR RESTAURANTERO'
+
+    # 6. Transporte, Taxis y Vehículos
+    if re.search(r'TRANSPORTE PUBLICO|TAXI', texto): return 'SUSTITUCION TRANSPORTE PUBLICO'
+    if re.search(r'SUBASTA|VEHICULOS LIGEROS|ADQUISICION VEHICULOS', texto): return 'ADQUISICION VEHICULOS'
+    if re.search(r'AUTOTRANSPORTE|TRANSPORTISTA|SUSTIT.*VEHICULAR', texto): return 'AUTOTRANSPORTE'
+
+    # 7. Mujeres, Jóvenes y Primer Crédito
+    if re.search(r'MUJER', texto): return 'MUJERES EMPRESARIAS'
+    if re.search(r'CRED JOVEN|CREDITO JOVEN', texto): return 'CREDITO JOVEN'
+    if re.search(r'TU PRIMER CR[EÉ]D', texto): return 'TU PRIMER CREDITO'
+
+    # 8. Energía y Vivienda
+    if re.search(r'EFICIENCIA ENERGETICA|AHORRO ENERG|SIST SOLARES|FOTOVOLTAICO|ECO CR[EÉ]DITO|FDO SOSTENIBLE|PANEL SOLAR', texto): return 'EFICIENCIA ENERGETICA Y RENOVABLES'
+    if re.search(r'MEJORAMIENTO.*VIVIENDA', texto): return 'MEJORAMIENTO DE VIVIENDA'
+
+    # 9. Productos Financieros Específicos NAFIN / BANCOMEXT
+    if re.search(r'CREDIACTIVO|CREDIAC|CREDIATIVO', texto): return 'CREDIACTIVO'
+    if re.search(r'CAPEX', texto): return 'CAPEX'
+    if re.search(r'IFNB|IFNBS', texto): return 'FORTALECIMIENTO IFNBS'
     if re.search(r'FIANZAS PARI PASSU|GTIA SOBRE FIANZAS', texto): return 'GARANTIA SOBRE FIANZAS'
-    if 'SUSTIT' in texto and 'VEHICULAR' in texto: return 'SUSTITUCION PARQUE VEHICULAR'
-    if 'MIPYME MUNICIPAL' in texto: return 'MIPYME MUNICIPAL'
-    if 'EFICIENCIA ENERGETICA' in texto or 'AHORRO ENERGETICO' in texto: return 'EFICIENCIA ENERGETICA'
-    if 'SECTOR MEDICO' in texto: return 'SECTOR MEDICO'
-    if 'RESTAURANTES' in texto: return 'RESTAURANTES'
-    if re.search(r'REACT ECON|REAC ECON|REACTIVACION ECONOMICA', texto): return 'REACTIVACION ECONOMICA'
-    if 'PROM DES ECON' in texto: return 'PROMOCION DESARROLLO ECONOMICO'
-    if 'PYME HASTA 20 MDP' in texto: return 'PYME HASTA 20 MDP'
-    if 'MIPYME (CREDITO COMERCIAL)' in texto: return 'MIPYME CREDITO COMERCIAL'
-    if 'INUNDACIONES' in texto or 'HURACAN OTIS' in texto: return 'APOYO DESASTRES NATURALES'
-    if 'GOBIERNO FEDERAL' in texto: return 'PROVEEDOR DEL GOBIERNO FEDERAL'
-    if 'FINANCIAMIENTO DIGITAL' in texto: return 'FINANCIAMIENTO DIGITAL'
-    if 'CRED JOVEN' in texto: return 'CREDITO JOVEN'
-    if 'GARANTIA AUTOMATICA' in texto: return 'GARANTIA AUTOMATICA'
-    if 'GARANTIA AGIL' in texto: return 'GARANTIA AGIL'
-    if 'CREDICADENAS' in texto or 'GRANDES EMPRESAS' in texto: return 'CREDICADENAS'
-    if 'AUTOTRANSPORTE' in texto: return 'AUTOTRANSPORTE'
-    if 'ADQUISICION VEHICULOS' in texto: return 'ADQUISICION VEHICULOS'
-    if 'TRADICIONAL' in texto: return 'TRADICIONAL'
-    if 'GLOBAL PYME' in texto: return 'GLOBAL PYME'
-    if re.search(r'CONSTRUCTOR CREDIACTIVO|CREDIAC EMPR', texto): return 'CREDIACTIVO'
-    if 'SELECTIVA' in texto: return 'SELECTIVA'
-    if 'FORTALECIMIENTO IFNBS' in texto: return 'FORTALECIMIENTO IFNBS'
+    if re.search(r'CREDISUMINISTROS', texto): return 'CREDISUMINISTROS'
+    if re.search(r'CREDICADENAS|EMPRESAS EJE', texto): return 'CREDICADENAS'
+    if re.search(r'PLAN MEXICO', texto): return 'PLAN MEXICO'
+    if re.search(r'COBERTURAS DIFERENCIADAS', texto): return 'COBERTURAS DIFERENCIADAS'
+    if re.search(r'GARANTIA AUTOMATICA', texto): return 'GARANTIA AUTOMATICA'
+    if re.search(r'GARANTIA AGIL|PYME AGIL', texto): return 'GARANTIA AGIL'
+    if re.search(r'ARRENDAMIENTO', texto): return 'ARRENDAMIENTO FINANCIERO'
+    if re.search(r'FINANCIAMIENTO DIGITAL', texto): return 'FINANCIAMIENTO DIGITAL'
+    if re.search(r'GOBIERNO FEDERAL', texto): return 'PROVEEDOR DEL GOBIERNO FEDERAL'
+    if re.search(r'SELECTIVA|SELECT\s', texto): return 'SELECTIVA'
+    if re.search(r'PRODUCTO NAFIN EMPRESARIAL', texto): return 'PRODUCTO NAFIN EMPRESARIAL'
 
+    # 10. Categorías por Tamaño / Genéricas (Catch-All final)
+    if re.search(r'MICROEMPRESA|MICRONEGOCIO|MICROEMP|MICROAPOYO', texto): return 'FINANCIAMIENTO A MICRONEGOCIOS'
+    if re.search(r'DIVISION EMPRESARIAL.*GDE|EMPRESA MEDIANA Y GRANDE|GRANDES EMPRESAS|MEDIANA EMPRESA', texto): return 'GRANDES EMPRESAS Y CORPORATIVO'
+    if re.search(r'PYME|CREDIPYME|CREDITO SIMPLE|CRED SIMPLE|SIMPLE SUB|SEMIPAR|CREDITO EMPRESARIAL|CREDITO A EMPRESAS|CRED LIQUIDO|CAP TRAB|TRADICIONAL|TRAD HASTA|LINEAS PP|CONSOLIDACIONES|MIPYME|CREDITO COMERCIAL|PRODUCTO MIFEL', texto): return 'CREDITO PYME TRADICIONAL'
+
+    # Si sobrevive a todo lo anterior, se clasifica como Otros
     return 'OTROS PROGRAMAS'
 
 
