@@ -101,40 +101,54 @@ def fmt_periodo(fecha) -> str:
     if pd.isna(fecha):
         return "N/D"
     ts = pd.Timestamp(fecha)
-    return f"{MESES_ES.get(ts.month, '')} {ts.year}"
+    return f"{MESES_ES.get(ts.month, '')}-{str(ts.year)[-2:]}"
 
 
-def get_custom_ticks(max_value, n_ticks=5):
+def get_custom_ticks(max_value, min_value=0, n_ticks=6, prefix="$", suffix="", decimals=0, base=None):
     import math
-    if pd.isna(max_value) or max_value <= 0:
-        return [0], ["$0"]
-    raw_step = max_value / n_ticks
-    mag = math.floor(math.log10(raw_step)) if raw_step > 0 else 1
-    mag_pow = 10 ** mag
-    mag_m = raw_step / mag_pow
-    if mag_m > 5: step = 10 * mag_pow
-    elif mag_m > 2: step = 5 * mag_pow
-    elif mag_m > 1: step = 2 * mag_pow
-    else: step = 1 * mag_pow
+    if pd.isna(max_value) or pd.isna(min_value) or max_value == min_value:
+        val = min_value if not pd.isna(min_value) else 0
+        return [val], [f"{prefix}{val}{suffix}"]
+    
+    if base is not None:
+        floor_limit = math.floor(min_value / base) * base
+        ceil_limit = math.ceil(max_value / base) * base
+        if floor_limit == ceil_limit:
+            ceil_limit += base
+        step = (ceil_limit - floor_limit) / (n_ticks - 1)
+        tickvals = [floor_limit + (i * step) for i in range(n_ticks)]
+    else:
+        # Margen del 5% arriba y abajo para no "aplastar" la gráfica
+        rango = max_value - min_value
+        calc_min = min_value - (rango * 0.05)
+        calc_max = max_value + (rango * 0.05)
+        
+        # Si los datos originales no bajan de 0, forzamos que el eje no muestre negativos
+        if min_value >= 0 and calc_min < 0:
+            calc_min = 0
 
-    tickvals = []
-    cur = 0
-    while cur <= max_value * 1.05:
-        tickvals.append(cur)
-        cur += step
-
+        step = (calc_max - calc_min) / (n_ticks - 1)
+        tickvals = [calc_min + (i * step) for i in range(n_ticks)]
+    
     ticktext = []
     for v in tickvals:
-        if v == 0:
-            ticktext.append("$0")
-        elif v >= 1_000_000_000:
-            ticktext.append(f"${v/1_000_000_000:,.1f} MM".replace(".0 MM", " MM"))
-        elif v >= 1_000_000:
-            ticktext.append(f"${v/1_000_000:,.1f} M".replace(".0 M", " M"))
-        elif v >= 1_000:
-            ticktext.append(f"${v/1_000:,.1f} K".replace(".0 K", " K"))
+        if abs(v) < 1e-9:
+            ticktext.append(f"{prefix}0{suffix}")
+        elif abs(v) >= 1_000_000_000:
+            ticktext.append(f"{prefix}{v/1_000_000_000:,.1f} MM{suffix}".replace(".0 MM", " MM"))
+        elif abs(v) >= 1_000_000:
+            ticktext.append(f"{prefix}{v/1_000_000:,.1f} M{suffix}".replace(".0 M", " M"))
+        elif abs(v) >= 1_000:
+            ticktext.append(f"{prefix}{v/1_000:,.1f} K{suffix}".replace(".0 K", " K"))
         else:
-            ticktext.append(f"${v:,.0f}")
+            if decimals > 0:
+                # Para porcentajes/tasas: remueve ceros decimales innecesarios dinámicamente
+                val_str = f"{v:.{decimals}f}"
+                if '.' in val_str:
+                    val_str = val_str.rstrip('0').rstrip('.')
+                ticktext.append(f"{prefix}{val_str}{suffix}")
+            else:
+                ticktext.append(f"{prefix}{v:,.0f}{suffix}")
     return tickvals, ticktext
 
 
@@ -618,6 +632,7 @@ with st.container(border=True):
             key="preset_selector",
             label_visibility="collapsed",
             on_change=apply_preset,
+            placeholder="Elige una opción",
         )
     with fc2:
         st.markdown("**Periodo (mensual)**")
@@ -731,37 +746,48 @@ with st.container(border=True):
         df_evol = df_evol.sort_values("periodo").reset_index(drop=True)
         df_evol["periodo_label"] = df_evol["periodo"].apply(fmt_periodo)
 
+        # Cálculo dinámico de etiquetas para el Eje X (Garantiza siempre los extremos)
+        total_periodos = len(df_evol)
+        if total_periodos > 6:
+            paso = (total_periodos - 1) / 5
+            # Generamos índices equidistantes y forzamos el último elemento
+            idx_x = sorted(list(set([int(round(i * paso)) for i in range(5)] + [total_periodos - 1])))
+            x_ticks = df_evol["periodo_label"].iloc[idx_x].tolist()
+        else:
+            x_ticks = df_evol["periodo_label"].tolist()
+
         c_evol1, c_evol2, c_evol3 = st.columns(3)
 
         with c_evol1:
             st.markdown('<p class="chart-insight"><b>Monto Colocado</b></p>', unsafe_allow_html=True)
-            fig_coloc = px.line(df_evol, x="periodo", y="monto_colocado", custom_data=["periodo_label"], markers=True)
+            fig_coloc = px.line(df_evol, x="periodo_label", y="monto_colocado", custom_data=["periodo_label"], markers=True)
             fig_coloc.update_traces(line_color=PRIMARY, line_width=3, marker=dict(size=6), hovertemplate="<b>%{customdata[0]}</b><br>Monto Colocado: $%{y:,.0f}<extra></extra>")
             aplicar_tema(fig_coloc, altura=280)
-            t_vals1, t_texts1 = get_custom_ticks(df_evol["monto_colocado"].max())
-            fig_coloc.update_yaxes(tickmode="array", tickvals=t_vals1, ticktext=t_texts1, title=None)
-            fig_coloc.update_xaxes(title=None)
+            t_vals1, t_texts1 = get_custom_ticks(df_evol["monto_colocado"].max(), min_value=df_evol["monto_colocado"].min(), n_ticks=6, base=10_000_000_000)
+            fig_coloc.update_yaxes(tickmode="array", tickvals=t_vals1, ticktext=t_texts1, title=None, range=[t_vals1[0], t_vals1[-1]])
+            fig_coloc.update_xaxes(title=None, tickangle=-90, tickvals=x_ticks)
             fig_coloc.update_layout(margin=dict(l=10, r=10, t=10, b=10))
             st.plotly_chart(fig_coloc, use_container_width=True, config={"displayModeBar": False})
 
         with c_evol2:
             st.markdown('<p class="chart-insight"><b>Saldo</b></p>', unsafe_allow_html=True)
-            fig_saldo = px.line(df_evol, x="periodo", y="saldo", custom_data=["periodo_label"], markers=True)
+            fig_saldo = px.line(df_evol, x="periodo_label", y="saldo", custom_data=["periodo_label"], markers=True)
             fig_saldo.update_traces(line_color=SLATE_700, line_width=3, marker=dict(size=6), hovertemplate="<b>%{customdata[0]}</b><br>Saldo: $%{y:,.0f}<extra></extra>")
             aplicar_tema(fig_saldo, altura=280)
-            t_vals2, t_texts2 = get_custom_ticks(df_evol["saldo"].max())
-            fig_saldo.update_yaxes(tickmode="array", tickvals=t_vals2, ticktext=t_texts2, title=None)
-            fig_saldo.update_xaxes(title=None)
+            t_vals2, t_texts2 = get_custom_ticks(df_evol["saldo"].max(), min_value=df_evol["saldo"].min(), n_ticks=6, base=5_000_000_000)
+            fig_saldo.update_yaxes(tickmode="array", tickvals=t_vals2, ticktext=t_texts2, title=None, range=[t_vals2[0], t_vals2[-1]])
+            fig_saldo.update_xaxes(title=None, tickangle=-90, tickvals=x_ticks)
             fig_saldo.update_layout(margin=dict(l=10, r=10, t=10, b=10))
             st.plotly_chart(fig_saldo, use_container_width=True, config={"displayModeBar": False})
 
         with c_evol3:
             st.markdown('<p class="chart-insight"><b>Tasa de Interés Promedio</b></p>', unsafe_allow_html=True)
-            fig_tasa = px.line(df_evol, x="periodo", y="tasa_prom", custom_data=["periodo_label"], markers=True)
+            fig_tasa = px.line(df_evol, x="periodo_label", y="tasa_prom", custom_data=["periodo_label"], markers=True)
             fig_tasa.update_traces(line_color=ACCENT_AMBER, line_width=3, marker=dict(size=6), hovertemplate="<b>%{customdata[0]}</b><br>Tasa Prom.: %{y:.2f}%<extra></extra>")
             aplicar_tema(fig_tasa, altura=280)
-            fig_tasa.update_yaxes(title=None, ticksuffix="%")
-            fig_tasa.update_xaxes(title=None)
+            t_vals3, t_texts3 = get_custom_ticks(df_evol["tasa_prom"].max(), min_value=df_evol["tasa_prom"].min(), n_ticks=6, prefix="", suffix="%", decimals=2, base=0.5)
+            fig_tasa.update_yaxes(tickmode="array", tickvals=t_vals3, ticktext=t_texts3, title=None, range=[t_vals3[0], t_vals3[-1]])
+            fig_tasa.update_xaxes(title=None, tickangle=-90, tickvals=x_ticks)
             fig_tasa.update_layout(margin=dict(l=10, r=10, t=10, b=10))
             st.plotly_chart(fig_tasa, use_container_width=True, config={"displayModeBar": False})
 
@@ -835,6 +861,11 @@ with col_left:
         if df_estrato.empty:
             st.info("No hay datos para los filtros seleccionados.")
         else:
+            df_estrato["orden_aux"] = df_estrato["estrato"].apply(
+                lambda x: ["GRANDE", "MEDIANA", "PEQUENA", "MICRO"].index(_norm_estrato(x)) if _norm_estrato(x) in ["GRANDE", "MEDIANA", "PEQUENA", "MICRO"] else 99
+            )
+            df_estrato = df_estrato.sort_values("orden_aux").drop(columns=["orden_aux"])
+
             fig_donut = px.pie(
                 df_estrato, names="estrato", values="saldo", hole=0.6,
                 color="estrato", color_discrete_map=MAPA_COLOR_ESTRATO,
@@ -868,13 +899,21 @@ with col_right:
             )
             df_int_estrato = df_int_estrato.sort_values(["intermediario", "estrato"])
 
+            orden_estratos = sorted(
+                df_int_estrato["estrato"].unique(),
+                key=lambda x: ["GRANDE", "MEDIANA", "PEQUENA", "MICRO"].index(_norm_estrato(x)) if _norm_estrato(x) in ["GRANDE", "MEDIANA", "PEQUENA", "MICRO"] else 99
+            )
+
             fig_int = px.bar(
                 df_int_estrato, x="saldo", y="intermediario", color="estrato", orientation="h",
                 color_discrete_map=MAPA_COLOR_ESTRATO,
-                category_orders={"intermediario": orden_invertido},
+                category_orders={
+                    "intermediario": orden_invertido,
+                    "estrato": orden_estratos
+                },
             )
             fig_int.update_traces(hovertemplate="<b>%{y}</b><br>%{fullData.name}: $%{x:,.0f}<extra></extra>")
-            fig_int.update_layout(barmode="stack")
+            fig_int.update_layout(barmode="stack", legend_title_text="")
             # Ajustamos a altura 380 para que embone perfectamente con la dona
             aplicar_tema(fig_int, altura=380)
             t_vals_i, t_texts_i = get_custom_ticks(df_top_int["saldo"].max())
@@ -1006,7 +1045,7 @@ else:
                 column_config={
                     "Estado": st.column_config.TextColumn("Entidad Federativa"),
                     "Saldo (MDP)": st.column_config.NumberColumn("Saldo (MDP)", format="$ %.1f"),
-                    "Acreditados": st.column_config.NumberColumn("Acreditados", format="%d"),
+                    "Acreditados": st.column_config.NumberColumn("Acreditados", format=",d"),
                     "Tasa Prom. (%)": st.column_config.NumberColumn("Tasa Prom. (%)", format="%.2f%%"),
                 },
             )
