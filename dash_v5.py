@@ -17,16 +17,22 @@ st.set_page_config(
 PARQUET_PATH = "data/intermediate/garantias_v5_part/**/*.parquet"
 
 BG = "#F8FAFC"
-PRIMARY = "#2596BE"
-PRIMARY_DARK = "#1C7691"
-ACCENT_AMBER = "#F59E0B"
+NAFIN = "#00708F"
+BCMXT = "#008689"
+COLOR_BANCO = {"NAFIN": NAFIN, "BANCOMEXT": BCMXT}
+PRIMARY = NAFIN
 SLATE_100 = "#F1F5F9"
 SLATE_200 = "#E2E8F0"
 SLATE_500 = "#64748B"
 SLATE_700 = "#334155"
 SLATE_900 = "#0F172A"
 
-PALETA_ESTRATO = ["#8AD1E6", "#5CB3D1", PRIMARY, PRIMARY_DARK, SLATE_700, "#CBD5E1"]
+PALETA_ESTRATO = ["#9EC9D4", "#529EB3", NAFIN, "#004559", "#94A3B8", "#CBD5E1"]
+PALETA_ESTRATO_BCMXT = ["#ADD8D9", "#66B6B8", BCMXT, "#005355", "#94A3B8", "#CBD5E1"]
+RAMPA_MAPA = {
+    "NAFIN":     ["#E0EEF2", "#9EC9D4", "#4798AE", "#00708F", "#003240"],
+    "BANCOMEXT": ["#E0F0F1", "#9ED1D2", "#47A8AA", "#008689", "#003C3E"],
+}
 ORDEN_ESTRATO_PREFERIDO = ["MICRO", "PEQUENA", "MEDIANA", "GRANDE"]
 
 MESES_ES = {
@@ -174,18 +180,22 @@ def _norm_estrato(v: str) -> str:
     return v
 
 
-def construir_mapa_color_estrato(valores_estrato) -> dict:
+def construir_mapa_color_estrato(valores_estrato, paleta) -> dict:
     """Asigna colores a los estratos, respetando el orden Micro -> Grande
     cuando los valores coinciden con esa nomenclatura, y cayendo a la
     paleta secuencial para cualquier otro valor no anticipado."""
     valores_unicos = list(dict.fromkeys(valores_estrato))
 
-    def orden_key(v):
-        vn = _norm_estrato(v)
-        return ORDEN_ESTRATO_PREFERIDO.index(vn) if vn in ORDEN_ESTRATO_PREFERIDO else len(ORDEN_ESTRATO_PREFERIDO)
+    def _peso(val):
+        s = str(val).upper()
+        if "MICRO" in s: return 1
+        if "PEQ" in s: return 2
+        if "MEDIAN" in s: return 3
+        if "GRAND" in s: return 4
+        return 99
 
-    valores_ordenados = sorted(valores_unicos, key=orden_key)
-    return {v: PALETA_ESTRATO[i % len(PALETA_ESTRATO)] for i, v in enumerate(valores_ordenados)}
+    valores_ordenados = sorted(valores_unicos, key=_peso)
+    return {v: paleta[i % len(paleta)] for i, v in enumerate(valores_ordenados)}
 
 
 st.markdown(f"""
@@ -537,8 +547,8 @@ def query_mapa(periodo_corte, bancos_sel: tuple, estados_sel: tuple, estratos_se
     return con.execute(sql, params).fetchdf()
 
 
-PALETTE_NAFIN = ["#2596BE", "#5CB3D1", "#8AD1E6", "#1C7691", "#0F4C5C", "#CBD5E1", "#94A3B8"]
-PALETTE_BCMXT = ["#334155", "#475569", "#64748B", "#94A3B8", "#CBD5E1", "#1E293B", "#0F172A"]
+PALETTE_NAFIN = ["#004559", "#00708F", "#388FA8", "#66A9BC", "#8CBFCD", "#ADD1DB", "#94A3B8"]
+PALETTE_BCMXT = ["#005355", "#008689", "#38A1A3", "#66B6B8", "#8CC9CA", "#ADD8D9", "#94A3B8"]
 
 def render_donut_chart(df_data: pd.DataFrame, banco_nombre: str, palette: list):
     if df_data.empty: return None
@@ -559,9 +569,8 @@ def render_donut_chart(df_data: pd.DataFrame, banco_nombre: str, palette: list):
 
 def render_column_chart(df_data: pd.DataFrame, banco_nombre: str):
     if df_data.empty: return None
-    scale_colors = [SLATE_200, PRIMARY] if banco_nombre == "NAFIN" else [SLATE_200, SLATE_700]
     df_plot = df_data.head(8)
-    fig = px.bar(df_plot, x="intermediario", y="saldo", color="saldo", color_continuous_scale=scale_colors, text=df_plot["saldo"].apply(fmt_mdp))
+    fig = px.bar(df_plot, x="intermediario", y="saldo", color="saldo", color_continuous_scale=[SLATE_200, COLOR_BANCO.get(banco_nombre, NAFIN)], text=df_plot["saldo"].apply(fmt_mdp))
     fig.update_traces(textposition="outside", hovertemplate="<b>%{x}</b><br>Saldo: $%{y:,.0f}<extra></extra>")
     fig.update_coloraxes(showscale=False)
     aplicar_tema(fig, altura=380)
@@ -576,7 +585,6 @@ def render_column_chart(df_data: pd.DataFrame, banco_nombre: str):
 # ---------------------------------------------------------------------------
 periodos_disponibles, bancos_disponibles, estados_disponibles, estratos_disponibles = get_bounds()
 periodo_min, periodo_max = periodos_disponibles[0], periodos_disponibles[-1]
-MAPA_COLOR_ESTRATO = construir_mapa_color_estrato(estratos_disponibles)
 
 if "filtro_rango_periodo" not in st.session_state:
     st.session_state["filtro_rango_periodo"] = (periodo_min, periodo_max)
@@ -685,6 +693,12 @@ filtros_bancos = tuple(bancos_sel)
 filtros_estados = tuple(estados_sel)
 filtros_estratos = tuple(estratos_sel)
 
+banco_activo = filtros_bancos[0] if len(filtros_bancos) == 1 and filtros_bancos[0] in COLOR_BANCO else "NAFIN"
+acento = COLOR_BANCO[banco_activo] if len(filtros_bancos) == 1 else "#007B8C"
+
+paleta_estrato_actual = PALETA_ESTRATO_BCMXT if banco_activo == "BANCOMEXT" else PALETA_ESTRATO
+MAPA_COLOR_ESTRATO = construir_mapa_color_estrato(estratos_disponibles, paleta_estrato_actual)
+
 # ---------------------------------------------------------------------------
 # KPIs (5 tarjetas)
 # ---------------------------------------------------------------------------
@@ -761,7 +775,7 @@ with st.container(border=True):
         with c_evol1:
             st.markdown('<p class="chart-insight"><b>Monto Colocado</b></p>', unsafe_allow_html=True)
             fig_coloc = px.line(df_evol, x="periodo_label", y="monto_colocado", custom_data=["periodo_label"], markers=True)
-            fig_coloc.update_traces(line_color=PRIMARY, line_width=3, marker=dict(size=6), hovertemplate="<b>%{customdata[0]}</b><br>Monto Colocado: $%{y:,.0f}<extra></extra>")
+            fig_coloc.update_traces(line_color=NAFIN, fill='tozeroy', fillcolor='rgba(0, 112, 143, 0.15)', line_width=3, marker=dict(size=6), hovertemplate="<b>%{customdata[0]}</b><br>Monto Colocado: $%{y:,.0f}<extra></extra>")
             aplicar_tema(fig_coloc, altura=280)
             t_vals1, t_texts1 = get_custom_ticks(df_evol["monto_colocado"].max(), min_value=df_evol["monto_colocado"].min(), n_ticks=6, base=10_000_000_000)
             fig_coloc.update_yaxes(tickmode="array", tickvals=t_vals1, ticktext=t_texts1, title=None, range=[t_vals1[0], t_vals1[-1]])
@@ -772,7 +786,7 @@ with st.container(border=True):
         with c_evol2:
             st.markdown('<p class="chart-insight"><b>Saldo</b></p>', unsafe_allow_html=True)
             fig_saldo = px.line(df_evol, x="periodo_label", y="saldo", custom_data=["periodo_label"], markers=True)
-            fig_saldo.update_traces(line_color=SLATE_700, line_width=3, marker=dict(size=6), hovertemplate="<b>%{customdata[0]}</b><br>Saldo: $%{y:,.0f}<extra></extra>")
+            fig_saldo.update_traces(line_color=BCMXT, fill='tozeroy', fillcolor='rgba(0, 134, 137, 0.15)', line_width=3, marker=dict(size=6), hovertemplate="<b>%{customdata[0]}</b><br>Saldo: $%{y:,.0f}<extra></extra>")
             aplicar_tema(fig_saldo, altura=280)
             t_vals2, t_texts2 = get_custom_ticks(df_evol["saldo"].max(), min_value=df_evol["saldo"].min(), n_ticks=6, base=5_000_000_000)
             fig_saldo.update_yaxes(tickmode="array", tickvals=t_vals2, ticktext=t_texts2, title=None, range=[t_vals2[0], t_vals2[-1]])
@@ -783,7 +797,7 @@ with st.container(border=True):
         with c_evol3:
             st.markdown('<p class="chart-insight"><b>Tasa de Interés Promedio</b></p>', unsafe_allow_html=True)
             fig_tasa = px.line(df_evol, x="periodo_label", y="tasa_prom", custom_data=["periodo_label"], markers=True)
-            fig_tasa.update_traces(line_color=ACCENT_AMBER, line_width=3, marker=dict(size=6), hovertemplate="<b>%{customdata[0]}</b><br>Tasa Prom.: %{y:.2f}%<extra></extra>")
+            fig_tasa.update_traces(line_color="#000000", fill='tozeroy', fillcolor='rgba(0, 0, 0, 0.20)', line_width=3, marker=dict(size=6), hovertemplate="<b>%{customdata[0]}</b><br>Tasa Prom.: %{y:.2f}%<extra></extra>")
             aplicar_tema(fig_tasa, altura=280)
             t_vals3, t_texts3 = get_custom_ticks(df_evol["tasa_prom"].max(), min_value=df_evol["tasa_prom"].min(), n_ticks=6, prefix="", suffix="%", decimals=2, base=0.5)
             fig_tasa.update_yaxes(tickmode="array", tickvals=t_vals3, ticktext=t_texts3, title=None, range=[t_vals3[0], t_vals3[-1]])
@@ -806,7 +820,7 @@ with st.container(border=True):
         if is_only_bancomext:
             fig_prog = px.bar(
                 df_prog_dist, x="programa", y="monto", color="monto",
-                color_continuous_scale=[SLATE_200, PRIMARY],
+                color_continuous_scale=[SLATE_200, acento],
                 text=df_prog_dist["monto"].apply(fmt_mdp),
             )
             fig_prog.update_traces(textposition="outside", hovertemplate="%{x}<br>Saldo: $%{y:,.0f}<extra></extra>")
@@ -833,7 +847,7 @@ with st.container(border=True):
                         st.markdown(f'<p class="chart-insight" style="margin-top: 15px;"><b>{title_sub}</b></p>', unsafe_allow_html=True)
                         fig_sub = px.bar(
                             df_sub, x="programa", y="monto", color="monto",
-                            color_continuous_scale=[SLATE_200, PRIMARY],
+                            color_continuous_scale=[SLATE_200, acento],
                             text=df_sub["monto"].apply(fmt_mdp)
                         )
                         fig_sub.update_traces(textposition="outside", hovertemplate="%{x}<br>Saldo: $%{y:,.0f}<extra></extra>")
@@ -861,14 +875,23 @@ with col_left:
         if df_estrato.empty:
             st.info("No hay datos para los filtros seleccionados.")
         else:
-            df_estrato["orden_aux"] = df_estrato["estrato"].apply(
-                lambda x: ["GRANDE", "MEDIANA", "PEQUENA", "MICRO"].index(_norm_estrato(x)) if _norm_estrato(x) in ["GRANDE", "MEDIANA", "PEQUENA", "MICRO"] else 99
-            )
-            df_estrato = df_estrato.sort_values("orden_aux").drop(columns=["orden_aux"])
+            def _peso(val):
+                s = str(val).upper()
+                if "MICRO" in s: return 1
+                if "PEQ" in s: return 2
+                if "MEDIAN" in s: return 3
+                if "GRAND" in s: return 4
+                return 99
+
+            df_estrato["peso_orden"] = df_estrato["estrato"].apply(_peso)
+            df_estrato = df_estrato.sort_values("peso_orden")
+            orden_estratos = df_estrato["estrato"].tolist()
+            df_estrato = df_estrato.drop(columns=["peso_orden"])
 
             fig_donut = px.pie(
                 df_estrato, names="estrato", values="saldo", hole=0.6,
                 color="estrato", color_discrete_map=MAPA_COLOR_ESTRATO,
+                category_orders={"estrato": orden_estratos}
             )
             fig_donut.update_traces(
                 textposition="outside", textinfo="percent",
@@ -878,7 +901,7 @@ with col_left:
             aplicar_tema(fig_donut, altura=380)
             fig_donut.update_layout(
                 legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, font=dict(size=10)),
-                margin=dict(l=8, r=8, t=8, b=70),
+                margin=dict(l=8, r=8, t=20, b=0),
             )
             st.plotly_chart(fig_donut, use_container_width=True, config={"displayModeBar": False})
 
@@ -897,11 +920,21 @@ with col_right:
             df_int_estrato["intermediario"] = pd.Categorical(
                 df_int_estrato["intermediario"], categories=orden_invertido, ordered=True
             )
-            df_int_estrato = df_int_estrato.sort_values(["intermediario", "estrato"])
+            
+            def _peso(val):
+                s = str(val).upper()
+                if "MICRO" in s: return 1
+                if "PEQ" in s: return 2
+                if "MEDIAN" in s: return 3
+                if "GRAND" in s: return 4
+                return 99
+
+            df_int_estrato["peso_orden"] = df_int_estrato["estrato"].apply(_peso)
+            df_int_estrato = df_int_estrato.sort_values(["intermediario", "peso_orden"]).drop(columns=["peso_orden"])
 
             orden_estratos = sorted(
                 df_int_estrato["estrato"].unique(),
-                key=lambda x: ["GRANDE", "MEDIANA", "PEQUENA", "MICRO"].index(_norm_estrato(x)) if _norm_estrato(x) in ["GRANDE", "MEDIANA", "PEQUENA", "MICRO"] else 99
+                key=_peso
             )
 
             fig_int = px.bar(
@@ -996,14 +1029,14 @@ else:
         fig_mapa = px.choropleth(
             df_mapa_plot, geojson=geojson_data, locations="estado_geo",
             featureidkey="properties.name", color="saldo",
-            color_continuous_scale="Teal", hover_name="estado",
+            color_continuous_scale=RAMPA_MAPA[banco_activo], hover_name="estado",
             custom_data=["acreditados", "tasa_prom"],
         )
         ht = (
             "<b>%{hovertext}</b><br>"
-            "<span style='color:#7dd3c8; font-weight:700;'>Saldo:</span> $%{z:,.0f}<br>"
-            "<span style='color:#7dd3c8; font-weight:700;'>Acreditados:</span> %{customdata[0]:,}<br>"
-            "<span style='color:#7dd3c8; font-weight:700;'>Tasa Prom.:</span> %{customdata[1]:.2f}%<extra></extra>"
+            "<span style='color:#8AD1E6; font-weight:700;'>Saldo:</span> $%{z:,.0f}<br>"
+            "<span style='color:#8AD1E6; font-weight:700;'>Acreditados:</span> %{customdata[0]:,}<br>"
+            "<span style='color:#8AD1E6; font-weight:700;'>Tasa Prom.:</span> %{customdata[1]:.2f}%<extra></extra>"
         )
         fig_mapa.update_traces(
             hovertemplate=ht,
@@ -1039,18 +1072,17 @@ else:
             })
 
             st.dataframe(
-                df_tabla,
+                df_tabla.style.format({
+                    "Saldo (MDP)": "${:,.1f}",
+                    "Acreditados": "{:,}",
+                    "Tasa Prom. (%)": "{:.2f}%"
+                }),
                 use_container_width=True,
                 hide_index=True,
                 column_config={
                     "Estado": st.column_config.TextColumn("Entidad Federativa"),
-                    "Saldo (MDP)": st.column_config.NumberColumn("Saldo (MDP)", format="$ %.1f"),
-                    "Acreditados": st.column_config.NumberColumn("Acreditados", format="%d"),
-                    "Tasa Prom. (%)": st.column_config.NumberColumn("Tasa Prom. (%)", format="%.2f%%"),
+                    "Saldo (MDP)": st.column_config.NumberColumn("Saldo (MDP)"),
+                    "Acreditados": st.column_config.NumberColumn("Acreditados"),
+                    "Tasa Prom. (%)": st.column_config.NumberColumn("Tasa Prom. (%)"),
                 },
             )
-
-st.caption(
-    f"Datos fotográficos al **{fmt_periodo(periodo_fin)}** (evolución desde **{fmt_periodo(periodo_ini)}**) · "
-    f"{fmt_num(kpis['intermediarios'])} intermediarios activos en la selección."
-)
