@@ -1045,7 +1045,7 @@ else:
                 column_config={
                     "Estado": st.column_config.TextColumn("Entidad Federativa"),
                     "Saldo (MDP)": st.column_config.NumberColumn("Saldo (MDP)", format="$ %.1f"),
-                    "Acreditados": st.column_config.NumberColumn("Acreditados", format=",d"),
+                    "Acreditados": st.column_config.NumberColumn("Acreditados", format="%d"),
                     "Tasa Prom. (%)": st.column_config.NumberColumn("Tasa Prom. (%)", format="%.2f%%"),
                 },
             )
