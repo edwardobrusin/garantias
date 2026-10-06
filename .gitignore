@@ -2,6 +2,7 @@
 data/raw/*.parquet
 data/raw/*.csv
 data/raw/*.xlsx
+data/raw/*.mdb
 
 # Ignorar archivos intermedios masivos (versiones anteriores)
 data/intermediate/garantias_0926.parquet

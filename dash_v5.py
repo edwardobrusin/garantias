@@ -407,7 +407,7 @@ def query_kpis(periodo_corte, bancos_sel: tuple, estados_sel: tuple, estratos_se
             SUM(monto_colocado)                        AS monto_colocado,
             SUM(saldo)                                  AS saldo,
             SUM(tasa * saldo) / NULLIF(SUM(saldo), 0)   AS tasa_prom,
-            COUNT(DISTINCT rfc)                         AS acreditados,
+            COUNT(DISTINCT CASE WHEN CAST("Fecha Registro (MDA)" / 10000 AS INT) = {periodo_corte.year} THEN rfc END) AS acreditados,
             COUNT(DISTINCT intermediario)               AS intermediarios
         FROM garantias
         WHERE {where_sql}
@@ -536,7 +536,7 @@ def query_mapa(periodo_corte, bancos_sel: tuple, estados_sel: tuple, estratos_se
         SELECT
             estado,
             SUM(saldo)                                 AS saldo,
-            COUNT(DISTINCT rfc)                        AS acreditados,
+            COUNT(DISTINCT CASE WHEN CAST("Fecha Registro (MDA)" / 10000 AS INT) = {periodo_corte.year} THEN rfc END) AS acreditados,
             SUM(tasa * saldo) / NULLIF(SUM(saldo), 0)  AS tasa_prom
         FROM garantias
         WHERE {where_sql}
@@ -695,6 +695,7 @@ filtros_estratos = tuple(estratos_sel)
 
 banco_activo = filtros_bancos[0] if len(filtros_bancos) == 1 and filtros_bancos[0] in COLOR_BANCO else "NAFIN"
 acento = COLOR_BANCO[banco_activo] if len(filtros_bancos) == 1 else "#007B8C"
+banco_sufijo = f" — {filtros_bancos[0]}" if len(filtros_bancos) == 1 else ""
 
 paleta_estrato_actual = PALETA_ESTRATO_BCMXT if banco_activo == "BANCOMEXT" else PALETA_ESTRATO
 MAPA_COLOR_ESTRATO = construir_mapa_color_estrato(estratos_disponibles, paleta_estrato_actual)
@@ -773,7 +774,7 @@ with st.container(border=True):
         c_evol1, c_evol2, c_evol3 = st.columns(3)
 
         with c_evol1:
-            st.markdown('<p class="chart-insight"><b>Monto Colocado</b></p>', unsafe_allow_html=True)
+            st.markdown(f'<p class="chart-insight"><b>Monto Colocado{banco_sufijo}</b></p>', unsafe_allow_html=True)
             fig_coloc = px.line(df_evol, x="periodo_label", y="monto_colocado", custom_data=["periodo_label"], markers=True)
             fig_coloc.update_traces(line_color=NAFIN, fill='tozeroy', fillcolor='rgba(0, 112, 143, 0.15)', line_width=3, marker=dict(size=6), hovertemplate="<b>%{customdata[0]}</b><br>Monto Colocado: $%{y:,.0f}<extra></extra>")
             aplicar_tema(fig_coloc, altura=280)
@@ -784,8 +785,8 @@ with st.container(border=True):
             st.plotly_chart(fig_coloc, use_container_width=True, config={"displayModeBar": False})
 
         with c_evol2:
-            st.markdown('<p class="chart-insight"><b>Saldo</b></p>', unsafe_allow_html=True)
-            fig_saldo = px.line(df_evol, x="periodo_label", y="saldo", custom_data=["periodo_label"], markers=True)
+            st.markdown(f'<p class="chart-insight"><b>Saldo{banco_sufijo}</b></p>', unsafe_allow_html=True)
+            fig_saldo = px.line(df_evol, x="periodo_label", y="saldo", custom_data=["periodo_label"], markers=True) 
             fig_saldo.update_traces(line_color=BCMXT, fill='tozeroy', fillcolor='rgba(0, 134, 137, 0.15)', line_width=3, marker=dict(size=6), hovertemplate="<b>%{customdata[0]}</b><br>Saldo: $%{y:,.0f}<extra></extra>")
             aplicar_tema(fig_saldo, altura=280)
             t_vals2, t_texts2 = get_custom_ticks(df_evol["saldo"].max(), min_value=df_evol["saldo"].min(), n_ticks=6, base=5_000_000_000)
@@ -795,7 +796,7 @@ with st.container(border=True):
             st.plotly_chart(fig_saldo, use_container_width=True, config={"displayModeBar": False})
 
         with c_evol3:
-            st.markdown('<p class="chart-insight"><b>Tasa de Interés Promedio</b></p>', unsafe_allow_html=True)
+            st.markdown(f'<p class="chart-insight"><b>Tasa de Interés Promedio{banco_sufijo}</b></p>', unsafe_allow_html=True)
             fig_tasa = px.line(df_evol, x="periodo_label", y="tasa_prom", custom_data=["periodo_label"], markers=True)
             fig_tasa.update_traces(line_color="#000000", fill='tozeroy', fillcolor='rgba(0, 0, 0, 0.20)', line_width=3, marker=dict(size=6), hovertemplate="<b>%{customdata[0]}</b><br>Tasa Prom.: %{y:.2f}%<extra></extra>")
             aplicar_tema(fig_tasa, altura=280)
@@ -809,7 +810,7 @@ with st.container(border=True):
 # Distribución por Programa (Cuadrícula v4 - Ajustada a la escala del saldo)
 # ---------------------------------------------------------------------------
 with st.container(border=True):
-    st.markdown('<p class="chart-title">Distribución del portafolio por programa</p>', unsafe_allow_html=True)
+    st.markdown(f'<p class="chart-title">Distribución del portafolio por programa{banco_sufijo}</p>', unsafe_allow_html=True)
     df_prog_dist = query_programas_distribucion(periodo_fin, filtros_bancos, filtros_estados, filtros_estratos)
     if df_prog_dist.empty:
         st.info("No hay datos para los filtros seleccionados.")
@@ -866,93 +867,94 @@ with st.container(border=True):
 # ---------------------------------------------------------------------------
 # Distribución por Estrato (donut) + Top 10 Intermediarios apilados
 # ---------------------------------------------------------------------------
-col_left, col_right = st.columns([1, 1.4])
+if not filtros_estratos:
+    col_left, col_right = st.columns([1, 1.4])
 
-with col_left:
-    with st.container(border=True):
-        st.markdown('<p class="chart-title">Distribución del Saldo por Estrato</p>', unsafe_allow_html=True)
-        df_estrato = query_estrato(periodo_fin, filtros_bancos, filtros_estados, filtros_estratos)
-        if df_estrato.empty:
-            st.info("No hay datos para los filtros seleccionados.")
-        else:
-            def _peso(val):
-                s = str(val).upper()
-                if "MICRO" in s: return 1
-                if "PEQ" in s: return 2
-                if "MEDIAN" in s: return 3
-                if "GRAND" in s: return 4
-                return 99
+    with col_left:
+        with st.container(border=True):
+            st.markdown(f'<p class="chart-title">Distribución del Saldo por Estrato{banco_sufijo}</p>', unsafe_allow_html=True)
+            df_estrato = query_estrato(periodo_fin, filtros_bancos, filtros_estados, filtros_estratos)
+            if df_estrato.empty:
+                st.info("No hay datos para los filtros seleccionados.")
+            else:
+                def _peso(val):
+                    s = str(val).upper()
+                    if "MICRO" in s: return 1
+                    if "PEQ" in s: return 2
+                    if "MEDIAN" in s: return 3
+                    if "GRAND" in s: return 4
+                    return 99
 
-            df_estrato["peso_orden"] = df_estrato["estrato"].apply(_peso)
-            df_estrato = df_estrato.sort_values("peso_orden")
-            orden_estratos = df_estrato["estrato"].tolist()
-            df_estrato = df_estrato.drop(columns=["peso_orden"])
+                df_estrato["peso_orden"] = df_estrato["estrato"].apply(_peso)
+                df_estrato = df_estrato.sort_values("peso_orden")
+                orden_estratos = df_estrato["estrato"].tolist()
+                df_estrato = df_estrato.drop(columns=["peso_orden"])
 
-            fig_donut = px.pie(
-                df_estrato, names="estrato", values="saldo", hole=0.6,
-                color="estrato", color_discrete_map=MAPA_COLOR_ESTRATO,
-                category_orders={"estrato": orden_estratos}
-            )
-            fig_donut.update_traces(
-                textposition="outside", textinfo="percent",
-                hovertemplate="%{label}<br>Saldo: $%{value:,.0f} (%{percent})<extra></extra>",
-                sort=False,
-            )
-            aplicar_tema(fig_donut, altura=380)
-            fig_donut.update_layout(
-                legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, font=dict(size=10)),
-                margin=dict(l=8, r=8, t=20, b=0),
-            )
-            st.plotly_chart(fig_donut, use_container_width=True, config={"displayModeBar": False})
+                fig_donut = px.pie(
+                    df_estrato, names="estrato", values="saldo", hole=0.6,
+                    color="estrato", color_discrete_map=MAPA_COLOR_ESTRATO,
+                    category_orders={"estrato": orden_estratos}
+                )
+                fig_donut.update_traces(
+                    textposition="outside", textinfo="percent",
+                    hovertemplate="%{label}<br>Saldo: $%{value:,.0f} (%{percent})<extra></extra>",
+                    sort=False,
+                )
+                aplicar_tema(fig_donut, altura=380)
+                fig_donut.update_layout(
+                    legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, font=dict(size=10)),
+                    margin=dict(l=8, r=8, t=20, b=0),
+                )
+                st.plotly_chart(fig_donut, use_container_width=True, config={"displayModeBar": False})
 
-with col_right:
-    with st.container(border=True):
-        st.markdown('<p class="chart-title">Top 10 Intermediarios por Saldo, desglosado por Estrato</p>', unsafe_allow_html=True)
-        df_top_int = query_top_intermediarios(periodo_fin, filtros_bancos, filtros_estados, filtros_estratos)
-        if df_top_int.empty:
-            st.info("No hay intermediarios con saldo activo para los filtros seleccionados.")
-        else:
-            orden_intermediarios = df_top_int["intermediario"].tolist()
-            df_int_estrato = query_intermediarios_por_estrato(
-                periodo_fin, filtros_bancos, filtros_estados, filtros_estratos, tuple(orden_intermediarios)
-            )
-            orden_invertido = list(reversed(orden_intermediarios))
-            df_int_estrato["intermediario"] = pd.Categorical(
-                df_int_estrato["intermediario"], categories=orden_invertido, ordered=True
-            )
-            
-            def _peso(val):
-                s = str(val).upper()
-                if "MICRO" in s: return 1
-                if "PEQ" in s: return 2
-                if "MEDIAN" in s: return 3
-                if "GRAND" in s: return 4
-                return 99
+    with col_right:
+        with st.container(border=True):
+            st.markdown(f'<p class="chart-title">Top 10 Intermediarios por Saldo, desglosado por Estrato{banco_sufijo}</p>', unsafe_allow_html=True)
+            df_top_int = query_top_intermediarios(periodo_fin, filtros_bancos, filtros_estados, filtros_estratos)
+            if df_top_int.empty:
+                st.info("No hay intermediarios con saldo activo para los filtros seleccionados.")
+            else:
+                orden_intermediarios = df_top_int["intermediario"].tolist()
+                df_int_estrato = query_intermediarios_por_estrato(
+                    periodo_fin, filtros_bancos, filtros_estados, filtros_estratos, tuple(orden_intermediarios)
+                )
+                orden_invertido = list(reversed(orden_intermediarios))
+                df_int_estrato["intermediario"] = pd.Categorical(
+                    df_int_estrato["intermediario"], categories=orden_invertido, ordered=True
+                )
+                
+                def _peso(val):
+                    s = str(val).upper()
+                    if "MICRO" in s: return 1
+                    if "PEQ" in s: return 2
+                    if "MEDIAN" in s: return 3
+                    if "GRAND" in s: return 4
+                    return 99
 
-            df_int_estrato["peso_orden"] = df_int_estrato["estrato"].apply(_peso)
-            df_int_estrato = df_int_estrato.sort_values(["intermediario", "peso_orden"]).drop(columns=["peso_orden"])
+                df_int_estrato["peso_orden"] = df_int_estrato["estrato"].apply(_peso)
+                df_int_estrato = df_int_estrato.sort_values(["intermediario", "peso_orden"]).drop(columns=["peso_orden"])
 
-            orden_estratos = sorted(
-                df_int_estrato["estrato"].unique(),
-                key=_peso
-            )
+                orden_estratos = sorted(
+                    df_int_estrato["estrato"].unique(),
+                    key=_peso
+                )
 
-            fig_int = px.bar(
-                df_int_estrato, x="saldo", y="intermediario", color="estrato", orientation="h",
-                color_discrete_map=MAPA_COLOR_ESTRATO,
-                category_orders={
-                    "intermediario": orden_invertido,
-                    "estrato": orden_estratos
-                },
-            )
-            fig_int.update_traces(hovertemplate="<b>%{y}</b><br>%{fullData.name}: $%{x:,.0f}<extra></extra>")
-            fig_int.update_layout(barmode="stack", legend_title_text="")
-            # Ajustamos a altura 380 para que embone perfectamente con la dona
-            aplicar_tema(fig_int, altura=380)
-            t_vals_i, t_texts_i = get_custom_ticks(df_top_int["saldo"].max())
-            fig_int.update_xaxes(title=None, tickmode="array", tickvals=t_vals_i, ticktext=t_texts_i)
-            fig_int.update_yaxes(title=None, tickfont=dict(size=10))
-            st.plotly_chart(fig_int, use_container_width=True, config={"displayModeBar": False})
+                fig_int = px.bar(
+                    df_int_estrato, x="saldo", y="intermediario", color="estrato", orientation="h",
+                    color_discrete_map=MAPA_COLOR_ESTRATO,
+                    category_orders={
+                        "intermediario": orden_invertido,
+                        "estrato": orden_estratos
+                    },
+                )
+                fig_int.update_traces(hovertemplate="<b>%{y}</b><br>%{fullData.name}: $%{x:,.0f}<extra></extra>")
+                fig_int.update_layout(barmode="stack", legend_title_text="")
+                # Ajustamos a altura 380 para que embone perfectamente con la dona
+                aplicar_tema(fig_int, altura=380)
+                t_vals_i, t_texts_i = get_custom_ticks(df_top_int["saldo"].max())
+                fig_int.update_xaxes(title=None, tickmode="array", tickvals=t_vals_i, ticktext=t_texts_i)
+                fig_int.update_yaxes(title=None, tickfont=dict(size=10))
+                st.plotly_chart(fig_int, use_container_width=True, config={"displayModeBar": False})
 
 # ---------------------------------------------------------------------------
 # Intermediarios Financieros (Donas y Columnas v4) NAFIN / BCMXT
@@ -1056,11 +1058,11 @@ else:
         )
 
         with st.container(border=True):
-            st.markdown('<p class="chart-title">Distribución territorial: Saldo</p>', unsafe_allow_html=True)
+            st.markdown(f'<p class="chart-title">Distribución territorial: Saldo{banco_sufijo}</p>', unsafe_allow_html=True)
             st.plotly_chart(fig_mapa, use_container_width=True, config={"displayModeBar": False})
 
             st.markdown("<hr style='margin: 1.5rem 0;'>", unsafe_allow_html=True)
-            st.markdown('<p class="chart-title">Detalle por Entidad Federativa</p>', unsafe_allow_html=True)
+            st.markdown(f'<p class="chart-title">Detalle por Entidad Federativa{banco_sufijo}</p>', unsafe_allow_html=True)
 
             df_tabla = df_mapa.sort_values("saldo", ascending=False).reset_index(drop=True)
             df_tabla["saldo"] = df_tabla["saldo"] / 1_000_000
