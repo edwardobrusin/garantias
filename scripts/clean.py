@@ -17,11 +17,14 @@ import pandas as pd
 # Rutas
 # ---------------------------------------------------------------------------
 ARCHIVOS_RAW = [
-    "data/raw/garantias24_0926.parquet",
-    "data/raw/garantias25_0926.parquet",
-    "data/raw/garantias26_0926.parquet",
+    "data/raw/EXPORT_21.parquet",
+    "data/raw/EXPORT_22.parquet",
+    "data/raw/EXPORT_23.parquet",
+    "data/raw/EXPORT_24.parquet",
+    "data/raw/EXPORT_25.parquet",
+    "data/raw/EXPORT_26.parquet",
 ]
-DIR_SALIDA = "data/intermediate/garantias_v5_part"
+DIR_SALIDA = "data/intermediate/garantias_v7_part"
 
 # Columnas que se descartan por completo del análisis
 COLUMNAS_DESCARTAR = [
@@ -48,7 +51,12 @@ MAPEO_COLUMNAS = {
 # 1. Lectura y consolidación de los 3 parquet
 # ---------------------------------------------------------------------------
 def cargar_datos() -> pd.DataFrame:
-    dataframes = [pd.read_parquet(ruta) for ruta in ARCHIVOS_RAW]
+    print(f"Cargando {len(ARCHIVOS_RAW)} archivos parquet...")
+    dataframes = []
+    for ruta in ARCHIVOS_RAW:
+        print(f" - Leyendo {ruta}")
+        dataframes.append(pd.read_parquet(ruta))
+    print("Concatenando dataframes...")
     df = pd.concat(dataframes, ignore_index=True)
     df.columns = df.columns.str.strip()
     return df
@@ -249,14 +257,31 @@ def limpiar_intermediario(texto) -> str:
 # Orquestación
 # ---------------------------------------------------------------------------
 def main() -> None:
+    print("Iniciando proceso de limpieza...")
     df = cargar_datos()
+    print("Descartando columnas y renombrando...")
     df = descartar_y_renombrar(df)
+    print("Transformando periodo...")
     df = transformar_periodo(df)
 
-    df["programa"] = df["programa_raw"].apply(limpiar_programa)
-    df["estado"] = df["estado_raw"].apply(limpiar_estado)
-    df["intermediario"] = df["intermediario_raw"].apply(limpiar_intermediario)
+    print("Limpiando programas (sobre valores únicos para mayor velocidad)...")
+    unique_progs = df["programa_raw"].unique()
+    map_progs = {p: limpiar_programa(p) for p in unique_progs}
+    df["programa"] = df["programa_raw"].map(map_progs)
+
+    print("Limpiando estados...")
+    unique_ests = df["estado_raw"].unique()
+    map_ests = {e: limpiar_estado(e) for e in unique_ests}
+    df["estado"] = df["estado_raw"].map(map_ests)
+
+    print("Limpiando intermediarios...")
+    unique_ints = df["intermediario_raw"].unique()
+    map_ints = {i: limpiar_intermediario(i) for i in unique_ints}
+    df["intermediario"] = df["intermediario_raw"].map(map_ints)
+
     df = df.drop(columns=["programa_raw", "estado_raw", "intermediario_raw"])
+
+    print("Convirtiendo tipos de datos numéricos y strings...")
 
     # Tipos numéricos
     df["saldo"] = pd.to_numeric(df["saldo"], errors="coerce")
@@ -264,13 +289,16 @@ def main() -> None:
     df["tasa"] = pd.to_numeric(df["tasa"], errors="coerce")
     df["rfc"] = df["rfc"].astype(str).str.strip().str.upper()
 
+    print("Convirtiendo a categorías...")
     # Categorías para reducir tamaño y acelerar agrupaciones en DuckDB
     for col in ["intermediario", "programa", "estado", "estrato", "banco"]:
         df[col] = df[col].astype("category")
 
+    print("Creando columna de partición (anio_mes)...")
     # Creamos una columna de partición basada en año y mes
     df["anio_mes"] = df["periodo"].dt.strftime("%Y-%m")
 
+    print(f"Escribiendo {len(df):,} registros a particiones parquet en {DIR_SALIDA} (esto tomará varios minutos)...")
     # Limpiamos el directorio previo para evitar acumular parquets viejos o duplicar datos
     if Path(DIR_SALIDA).exists():
         shutil.rmtree(DIR_SALIDA)
